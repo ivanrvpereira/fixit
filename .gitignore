@@ -1,0 +1,10 @@
+.build/
+dist/
+.pi/
+.claude/
+docs/plans/
+.superpowers/
+.env
+.DS_Store
+*.xcuserstate
+CLAUDE.local.md

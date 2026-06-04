@@ -1,0 +1,32 @@
+{
+  "debugLogging": true,
+  "provider": "openrouter",
+  "model": "openai/gpt-4.1-mini",
+  "endpoint": null,
+  "apiKeyEnv": null,
+  "pickerShortcutKey": "0",
+  "pickerShortcutModifiers": ["command", "shift"],
+  "styles": [
+    {
+      "id": "native",
+      "label": "Sound native",
+      "promptFile": "styles/native.md",
+      "shortcutKey": "1",
+      "shortcutModifiers": ["command", "shift"]
+    },
+    {
+      "id": "rewrite",
+      "label": "Rewrite aggressively",
+      "promptFile": "styles/rewrite.md",
+      "shortcutKey": "2",
+      "shortcutModifiers": ["command", "shift"]
+    },
+    {
+      "id": "correct",
+      "label": "Correct minimally",
+      "promptFile": "styles/correct.md",
+      "shortcutKey": "3",
+      "shortcutModifiers": ["command", "shift"]
+    }
+  ]
+}
