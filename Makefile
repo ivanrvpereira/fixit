@@ -7,7 +7,12 @@ CODE_SIGN_IDENTITY ?= Fixit Local Code Signing
 
 # Run once to let codesign use the signing key without password prompts.
 trust-signing:
-	security set-key-partition-list -S apple-tool:,apple:,codesign: -s -l "$(CODE_SIGN_IDENTITY)" ~/Library/Keychains/login.keychain-db
+	@security find-identity -v -p codesigning ~/Library/Keychains/login.keychain-db | grep -Fq '"$(CODE_SIGN_IDENTITY)"' || { \
+		echo 'Missing signing identity: $(CODE_SIGN_IDENTITY)' >&2; \
+		echo 'Run ./scripts/create-signing-cert.sh first.' >&2; \
+		exit 1; \
+	}
+	security set-key-partition-list -S apple-tool:,apple:,codesign: -s -t private ~/Library/Keychains/login.keychain-db >/dev/null
 
 build:
 	./scripts/build-app.sh

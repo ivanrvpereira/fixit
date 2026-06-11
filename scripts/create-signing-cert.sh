@@ -34,6 +34,7 @@ EOF
 
 /usr/bin/openssl pkcs12 -export \
   -inkey "$TMP_DIR/key.pem" -in "$TMP_DIR/cert.pem" \
+  -name "$IDENTITY" \
   -out "$TMP_DIR/identity.p12" -passout pass:fixit-temp >/dev/null 2>&1
 
 security import "$TMP_DIR/identity.p12" -k "$KEYCHAIN" -P fixit-temp -T /usr/bin/codesign
