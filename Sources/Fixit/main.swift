@@ -2458,7 +2458,6 @@ final class AppController: NSObject, NSApplicationDelegate {
 
 func runCLI() async throws {
     let args = CommandLine.arguments
-    let styleID = value(after: "--style", in: args) ?? "native"
     let text: String
     if let inline = value(after: "--text", in: args) {
         text = inline
@@ -2470,10 +2469,33 @@ func runCLI() async throws {
     }
 
     let config = try RuntimeConfig.load()
-    let style = config.styles.first(where: { $0.id == styleID }) ?? RuntimeConfig.defaultStyles[0]
+    let style: StyleConfig
+    if let styleID = value(after: "--style", in: args) {
+        guard let match = config.styles.first(where: { $0.id == styleID }) else {
+            throw FixitError.configuration("Unknown style \"\(styleID)\". Available styles: \(config.styles.map(\.id).joined(separator: ", ")).")
+        }
+        style = match
+    } else {
+        style = config.styles.first(where: { $0.id == "native" }) ?? config.styles.first ?? RuntimeConfig.defaultStyles[0]
+    }
     let prompt = try PromptLoader(config: config).prompt(for: style)
     let client = OpenAICompatibleClient(config: config)
     print(try await client.fix(text: text, systemPrompt: prompt).text)
+}
+
+func printCLIUsage() {
+    print("""
+    Fixit — fix typos and polish phrasing in selected text with an LLM.
+
+    Usage:
+      Fixit                  Run the menu-bar app.
+      Fixit --fix [options]  Fix text once and print the result.
+
+    Options:
+      --style <id>   Style id from config.json (default: native).
+      --text <text>  Text to fix; reads stdin when omitted.
+      --help, -h     Show this help.
+    """)
 }
 
 func value(after flag: String, in args: [String]) -> String? {
@@ -2481,7 +2503,10 @@ func value(after flag: String, in args: [String]) -> String? {
     return args[index + 1]
 }
 
-if CommandLine.arguments.contains("--fix") {
+if CommandLine.arguments.contains("--help") || CommandLine.arguments.contains("-h") {
+    printCLIUsage()
+    exit(0)
+} else if CommandLine.arguments.contains("--fix") {
     do {
         try await runCLI()
         exit(0)
