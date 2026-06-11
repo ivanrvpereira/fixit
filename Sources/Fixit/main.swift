@@ -1346,19 +1346,42 @@ final class SettingsWindowController: NSWindowController {
             ])
         }
 
+        let isCollapsed = collapsedStyleIDs.contains(style.id)
+
+        let disclosure = NSButton()
+        disclosure.bezelStyle = .disclosure
+        disclosure.setButtonType(.pushOnPushOff)
+        disclosure.title = ""
+        disclosure.state = isCollapsed ? .off : .on
+        disclosure.target = self
+        disclosure.action = #selector(styleSectionToggled(_:))
+
         let sectionTitle = NSTextField(labelWithString: style.label)
         sectionTitle.font = .boldSystemFont(ofSize: 13)
         sectionTitle.alignment = .left
-        addFilling(sectionTitle, to: section)
+
+        let header = NSStackView()
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 6
+        header.addArrangedSubview(disclosure)
+        header.addArrangedSubview(sectionTitle)
+        addFilling(header, to: section)
+
+        let body = NSStackView()
+        body.translatesAutoresizingMaskIntoConstraints = false
+        body.orientation = .vertical
+        body.alignment = .leading
+        body.distribution = .fill
+        body.spacing = 10
+        body.isHidden = isCollapsed
+        addFilling(body, to: section)
+        sectionBodies[ObjectIdentifier(disclosure)] = (style.id, body)
 
         let shortcutField = NSTextField()
         shortcutField.placeholderString = "cmd+shift+1"
         shortcutField.stringValue = ShortcutParser.display(key: style.shortcutKey, modifiers: style.shortcutModifiers)
-        addFilling(row(label: "Shortcut", field: shortcutField), to: section)
-
-        let promptLabel = NSTextField(labelWithString: "Prompt")
-        promptLabel.font = .systemFont(ofSize: 12)
-        addFilling(promptLabel, to: section)
+        addFilling(row(label: "Shortcut", field: shortcutField), to: body)
 
         let promptView = NSTextView(frame: NSRect(x: 0, y: 0, width: 0, height: 180))
         promptView.string = (try? PromptLoader(config: config).prompt(for: style)) ?? ""
@@ -1393,7 +1416,7 @@ final class SettingsWindowController: NSWindowController {
             promptScroll.bottomAnchor.constraint(equalTo: promptContainer.bottomAnchor),
             promptContainer.heightAnchor.constraint(equalToConstant: 180),
         ])
-        addFilling(promptContainer, to: section)
+        addFilling(promptContainer, to: body)
 
         let promptFile = style.promptFile ?? "styles/\(style.id).md"
         styleEditors.append(StyleEditor(id: style.id, label: style.label, promptFile: promptFile, shortcutField: shortcutField, promptView: promptView))
@@ -1424,6 +1447,17 @@ final class SettingsWindowController: NSWindowController {
         row.addArrangedSubview(label)
         row.addArrangedSubview(field)
         return row
+    }
+
+    @objc private func styleSectionToggled(_ sender: NSButton) {
+        guard let entry = sectionBodies[ObjectIdentifier(sender)] else { return }
+        let collapsed = sender.state == .off
+        if collapsed {
+            collapsedStyleIDs.insert(entry.styleID)
+        } else {
+            collapsedStyleIDs.remove(entry.styleID)
+        }
+        entry.body.isHidden = collapsed
     }
 
     @objc private func cancelPressed() {
