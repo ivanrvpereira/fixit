@@ -240,6 +240,24 @@ struct RuntimeConfig {
         return defaultPath
     }
 
+    /// Last-resort defaults so the menu bar and Settings stay reachable when config.json cannot be loaded.
+    static func fallback() -> RuntimeConfig {
+        let provider = Provider.openRouter
+        return RuntimeConfig(
+            configDir: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/fixit"),
+            debugLogging: false,
+            styles: defaultStyles,
+            pickerKey: nil,
+            pickerModifiers: nil,
+            provider: provider,
+            model: provider.defaultModel,
+            baseURL: provider.defaultEndpoint.flatMap(URL.init(string:)) ?? URL(fileURLWithPath: "/"),
+            referer: nil,
+            appTitle: "Fixit",
+            apiKeyEnv: nil
+        )
+    }
+
     static let defaultStyles = [
         StyleConfig(id: "native", label: "Sound native", promptFile: "styles/native.md", shortcutKey: "1", shortcutModifiers: ["command", "shift"]),
         StyleConfig(id: "rewrite", label: "Rewrite aggressively", promptFile: "styles/rewrite.md", shortcutKey: "2", shortcutModifiers: ["command", "shift"]),
@@ -602,7 +620,7 @@ enum ConfigStore {
             try prompt.write(to: url, atomically: true, encoding: .utf8)
         }
 
-        let existing = try loadExistingConfig(from: config.configDir)
+        let existing = loadExistingConfig(from: config.configDir)
         let savedConfig = FixitConfig(
             debugLogging: existing?.debugLogging ?? config.debugLogging,
             styles: styles,
@@ -624,11 +642,11 @@ enum ConfigStore {
         try data.write(to: config.configDir.appendingPathComponent("config.json"), options: .atomic)
     }
 
-    private static func loadExistingConfig(from configDir: URL) throws -> FixitConfig? {
+    // Tolerates a malformed config.json: saving from Settings must be able to replace it.
+    private static func loadExistingConfig(from configDir: URL) -> FixitConfig? {
         let url = configDir.appendingPathComponent("config.json")
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(FixitConfig.self, from: data)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(FixitConfig.self, from: data)
     }
 }
 
@@ -2123,31 +2141,42 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var lastTargetApp: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        var startupError: Error?
         do {
             try reloadRuntime()
-            setupAppIcon()
-            setupMainMenu()
-            setupMenu()
-            trackFrontmostApp()
-            hotKeys = HotKeyManager(app: self)
-            hotKeys?.register(styles: config.styles, pickerKey: config.pickerKey, pickerModifiers: config.pickerModifiers)
-            logger.log("App started", ["provider": config.provider.rawValue, "model": config.model, "styles": config.styles.map(\.id).joined(separator: ",")])
-            if ProcessInfo.processInfo.environment["FIXIT_DEBUG_SETTINGS"] == "1" {
-                showSettings()
-                settingsWindow?.debugDumpLayout()
-            }
-            if ProcessInfo.processInfo.environment["FIXIT_DEBUG_ONBOARDING"] == "1" {
-                showOnboarding()
-                onboardingWindow?.debugDumpLayout()
-            }
+        } catch {
+            // A broken config.json must not take the status item down with it,
+            // or this LSUIElement app is left with no way to recover or quit.
+            startupError = error
+            config = RuntimeConfig.fallback()
+            logger = Logger(enabled: false, configDir: config.configDir)
+            promptLoader = PromptLoader(config: config)
+            client = OpenAICompatibleClient(config: config)
+        }
+        setupAppIcon()
+        setupMainMenu()
+        setupMenu()
+        trackFrontmostApp()
+        hotKeys = HotKeyManager(app: self)
+        hotKeys?.register(styles: config.styles, pickerKey: config.pickerKey, pickerModifiers: config.pickerModifiers)
+        logger.log("App started", ["provider": config.provider.rawValue, "model": config.model, "styles": config.styles.map(\.id).joined(separator: ",")])
+        if ProcessInfo.processInfo.environment["FIXIT_DEBUG_SETTINGS"] == "1" {
+            showSettings()
+            settingsWindow?.debugDumpLayout()
+        }
+        if ProcessInfo.processInfo.environment["FIXIT_DEBUG_ONBOARDING"] == "1" {
+            showOnboarding()
+            onboardingWindow?.debugDumpLayout()
+        }
+        if let startupError {
+            showError(startupError.localizedDescription)
+        } else {
             let configFileExists = FileManager.default.fileExists(atPath: config.configDir.appendingPathComponent("config.json").path)
             if !configFileExists {
                 showOnboarding()
-            } else if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
+            } else if config.provider.requiresAPIKey, ((try? CredentialStore.apiKey(for: config)) ?? nil) == nil {
                 showSettings(message: FixitError.missingAPIKey(config.provider.label).localizedDescription)
             }
-        } catch {
-            showError(error.localizedDescription)
         }
     }
 
