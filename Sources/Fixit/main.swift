@@ -288,6 +288,7 @@ enum FixitError: LocalizedError {
 final class Logger {
     private let enabled: Bool
     private let logURL: URL
+    private let timestampFormatter = ISO8601DateFormatter()
 
     init(enabled: Bool, configDir: URL) {
         self.enabled = enabled
@@ -302,7 +303,7 @@ final class Logger {
            let json = String(data: data, encoding: .utf8) {
             suffix = " \(json)"
         }
-        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\(suffix)\n"
+        let line = "[\(timestampFormatter.string(from: Date()))] \(message)\(suffix)\n"
         try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let data = line.data(using: .utf8) {
             if FileManager.default.fileExists(atPath: logURL.path),
@@ -466,7 +467,10 @@ enum DotEnv {
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         var result: [String: String] = [:]
         for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("export ") {
+                trimmed = String(trimmed.dropFirst("export ".count)).trimmingCharacters(in: .whitespaces)
+            }
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#"), let equals = trimmed.firstIndex(of: "=") else { continue }
             let key = trimmed[..<equals].trimmingCharacters(in: .whitespacesAndNewlines)
             var value = trimmed[trimmed.index(after: equals)...].trimmingCharacters(in: .whitespacesAndNewlines)
