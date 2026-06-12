@@ -154,7 +154,12 @@ struct RuntimeConfig {
         let defaultConfigDir = home.appendingPathComponent(".config/fixit")
         let legacyConfigDir = home.appendingPathComponent(".config/word-fixer")
         let configuredDir = env["FIXIT_CONFIG_DIR"] ?? env["WORD_FIXER_CONFIG_DIR"]
-        let configDir = URL(fileURLWithPath: configuredDir ?? (FileManager.default.fileExists(atPath: defaultConfigDir.path) ? defaultConfigDir.path : legacyConfigDir.path))
+        let configDir = URL(fileURLWithPath: resolveConfigDirPath(
+            configured: configuredDir,
+            defaultPath: defaultConfigDir.path,
+            legacyPath: legacyConfigDir.path,
+            exists: { FileManager.default.fileExists(atPath: $0) }
+        ))
         let configURL = configDir.appendingPathComponent("config.json")
         let config: FixitConfig
         if FileManager.default.fileExists(atPath: configURL.path) {
@@ -210,6 +215,18 @@ struct RuntimeConfig {
             appTitle: env["OPENROUTER_APP_TITLE"] ?? config.openRouterAppTitle ?? "Fixit",
             apiKeyEnv: apiKeyEnv
         )
+    }
+
+    // Fall back to the legacy word-fixer dir only when it actually exists;
+    // fresh installs must land in the new path.
+    static func resolveConfigDirPath(configured: String?, defaultPath: String, legacyPath: String, exists: (String) -> Bool) -> String {
+        if let configured, !configured.isEmpty {
+            return configured
+        }
+        if !exists(defaultPath), exists(legacyPath) {
+            return legacyPath
+        }
+        return defaultPath
     }
 
     static let defaultStyles = [
