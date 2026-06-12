@@ -12,7 +12,7 @@
 | Build release | `swift build -c release` |
 | CLI smoke test | `swift run Fixit --fix --style native --text "lets create a new project on this folder"` |
 | Build signed app bundle | `./scripts/build-app.sh` |
-| Run tests | `swift test` |
+| Run tests | `make test` (wraps `swift test`; fixes Testing.framework paths on CLT-only machines) |
 
 ## File-Scoped Commands
 | Task | Command |

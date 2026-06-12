@@ -432,7 +432,8 @@ enum DotEnv {
         return urls
     }
 
-    private static func parse(url: URL) -> [String: String]? {
+    // Internal (not private) so tests can cover the parsing rules.
+    static func parse(url: URL) -> [String: String]? {
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         var result: [String: String] = [:]
         for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {

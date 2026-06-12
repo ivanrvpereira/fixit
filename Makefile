@@ -3,7 +3,13 @@ DIST_APP := dist/$(APP_NAME).app
 INSTALL_APP := /Applications/$(APP_NAME).app
 CODE_SIGN_IDENTITY ?= Fixit Local Code Signing
 
-.PHONY: build deploy trust-signing
+# Swift Testing ships inside Xcode toolchains. With Command Line Tools alone,
+# SwiftPM misses the Testing.framework search paths, so pass them explicitly.
+DEVELOPER_DIR := $(shell xcode-select -p)
+CLT_TESTING_FRAMEWORKS := $(DEVELOPER_DIR)/Library/Developer/Frameworks
+CLT_TESTING_RPATH := $(DEVELOPER_DIR)/Library/Developer/usr/lib
+
+.PHONY: build deploy test trust-signing
 
 # Run once to let codesign use the signing key without password prompts.
 trust-signing:
@@ -16,6 +22,17 @@ trust-signing:
 
 build:
 	./scripts/build-app.sh
+
+test:
+	@if [ -d "$(CLT_TESTING_FRAMEWORKS)/Testing.framework" ]; then \
+		swift test \
+			-Xswiftc -F -Xswiftc "$(CLT_TESTING_FRAMEWORKS)" \
+			-Xlinker -F -Xlinker "$(CLT_TESTING_FRAMEWORKS)" \
+			-Xlinker -rpath -Xlinker "$(CLT_TESTING_FRAMEWORKS)" \
+			-Xlinker -rpath -Xlinker "$(CLT_TESTING_RPATH)"; \
+	else \
+		swift test; \
+	fi
 
 deploy: build
 	-osascript -e 'quit app "$(APP_NAME)"' 2>/dev/null
