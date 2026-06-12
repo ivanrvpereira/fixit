@@ -249,7 +249,7 @@ enum FixitError: LocalizedError {
         case .configuration(let message): message
         case .missingAPIKey(let provider): "\(provider) API key is missing. Add it in Fixit Settings."
         case .invalidAPIKey(let message): "API key is invalid. Add a valid key in Fixit Settings. \(message)"
-        case .noSelection: "No text was captured. Make sure text is selected."
+        case .noSelection: "No text to fix. Select text (or copy it to the clipboard) and try again."
         case .accessibilityRequired: "Accessibility permission required. Open System Settings → Privacy & Security → Accessibility."
         case .api(let message): message
         }
@@ -832,6 +832,8 @@ final class PasteboardSnapshot {
 struct TextTargetSession {
     let originalText: String
     let sourceApp: NSRunningApplication?
+    // False when the text came from the clipboard: accepting copies instead of pasting.
+    var replacesSelection = true
 }
 
 enum TextSelectionIO {
@@ -1041,7 +1043,7 @@ final class OverlayPanel: NSPanel {
         streamingView.scrollToEndOfDocument(nil)
     }
 
-    func showResult(original: String, fixed: String) {
+    func showResult(original: String, fixed: String, acceptTitle: String = "Replace") {
         onCancel = nil
         fixedTextForCopy = fixed
         rebuild {
@@ -1082,7 +1084,7 @@ final class OverlayPanel: NSPanel {
             buttons.addArrangedSubview(spacer)
             let dismiss = NSButton(title: "Dismiss", target: self, action: #selector(dismissPressed))
             let copy = NSButton(title: "Copy", target: self, action: #selector(copyPressed))
-            let accept = NSButton(title: "Replace", target: self, action: #selector(acceptPressed))
+            let accept = NSButton(title: acceptTitle, target: self, action: #selector(acceptPressed))
             accept.keyEquivalent = "\r"
             buttons.addArrangedSubview(dismiss)
             buttons.addArrangedSubview(copy)
@@ -1862,9 +1864,14 @@ final class AppController: NSObject, NSApplicationDelegate {
                 if fromMenu {
                     await refocusTargetApp()
                 }
-                let session = try TextSelectionIO.captureSelection()
+                let session = try captureSession()
                 let systemPrompt = try promptLoader.prompt(for: style)
-                startFix(systemPrompt: systemPrompt, input: session.originalText, session: session)
+                startFix(
+                    systemPrompt: systemPrompt,
+                    input: session.originalText,
+                    session: session,
+                    loadingTitle: session.replacesSelection ? "Fixing selected text…" : "Fixing clipboard text…"
+                )
             } catch {
                 handleTriggerError(error)
             }
@@ -1878,7 +1885,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 throw FixitError.missingAPIKey(config.provider.label)
             }
             // Capture while the target app is still frontmost; Esc later means nothing happened.
-            let session = try TextSelectionIO.captureSelection()
+            let session = try captureSession()
             stylePicker.onPick = { [weak self] style in
                 guard let self else { return }
                 do {
@@ -1896,6 +1903,21 @@ final class AppController: NSObject, NSApplicationDelegate {
             logger.log("picker open", ["styles": config.styles.count])
         } catch {
             handleTriggerError(error)
+        }
+    }
+
+    // Nothing selected usually means the hotkey was pressed without a selection;
+    // fall back to fixing the clipboard contents so the press still does something useful.
+    private func captureSession() throws -> TextTargetSession {
+        do {
+            return try TextSelectionIO.captureSelection()
+        } catch FixitError.noSelection {
+            let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
+            guard !clipboard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw FixitError.noSelection
+            }
+            logger.log("clipboard fallback", ["length": clipboard.count])
+            return TextTargetSession(originalText: clipboard, sourceApp: nil, replacesSelection: false)
         }
     }
 
@@ -1960,17 +1982,27 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         logger.log("fix complete", ["durationMs": Int(Date().timeIntervalSince(started) * 1000), "inputLength": input.count, "outputLength": fixed.text.count, "cost": fixed.cost ?? 0])
         overlay.onAccept = { [weak self] in
-            do {
-                try TextSelectionIO.replaceSelectedText(with: fixed.text, in: session)
-            } catch {
-                self?.showError(error.localizedDescription)
+            if session.replacesSelection {
+                do {
+                    try TextSelectionIO.replaceSelectedText(with: fixed.text, in: session)
+                } catch {
+                    self?.showError(error.localizedDescription)
+                }
+            } else {
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(fixed.text, forType: .string)
             }
         }
         overlay.onDismiss = nil
         overlay.onRefine = { [weak self] instruction in
             self?.refine(instruction: instruction, input: fixed.text, session: session)
         }
-        overlay.showResult(original: session.originalText, fixed: fixed.text)
+        overlay.showResult(
+            original: session.originalText,
+            fixed: fixed.text,
+            acceptTitle: session.replacesSelection ? "Replace" : "Copy to Clipboard"
+        )
     }
 
     private func handleTriggerError(_ error: Error) {
