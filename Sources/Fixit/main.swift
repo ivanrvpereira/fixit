@@ -1495,12 +1495,8 @@ final class SettingsWindowController: NSWindowController {
                 customEndpoint = endpoint
             }
 
-            if provider != .ollama {
-                try KeychainStore.saveAPIKey(apiKeyField.stringValue, provider: provider)
-            }
-            // The model now lives in config.json; drop the legacy Keychain copy so it can't shadow it.
-            try KeychainStore.deleteOpenRouterModel()
-
+            // Validate every shortcut before persisting anything, so a typo
+            // can't leave the Keychain updated but the config unsaved.
             var styles: [StyleConfig] = []
             var prompts: [String: String] = [:]
             for editor in styleEditors {
@@ -1515,6 +1511,13 @@ final class SettingsWindowController: NSWindowController {
                 prompts[editor.promptFile] = editor.promptView.string
             }
             let pickerShortcut = try ShortcutParser.parse(pickerShortcutField.stringValue)
+
+            if provider != .ollama {
+                try KeychainStore.saveAPIKey(apiKeyField.stringValue, provider: provider)
+            }
+            // The model now lives in config.json; drop the legacy Keychain copy so it can't shadow it.
+            try KeychainStore.deleteOpenRouterModel()
+
             try ConfigStore.save(
                 config: currentConfig,
                 styles: styles,
