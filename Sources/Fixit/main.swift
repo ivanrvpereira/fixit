@@ -1764,6 +1764,220 @@ final class SettingsWindowController: NSWindowController {
     }
 }
 
+@MainActor
+final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
+    private let providers = Provider.allCases.filter { $0 != .custom }
+    private let providerPopup = NSPopUpButton()
+    private let apiKeyField = NSSecureTextField()
+    private let permissionLabel = NSTextField(labelWithString: "Checking…")
+    private let sampleField = NSTextField(string: "lets create a new project on this folder")
+    private let testResultLabel = NSTextField(labelWithString: "")
+    private var permissionTimer: Timer?
+    private let config: RuntimeConfig
+    var onFinish: (() -> Void)?
+
+    init(config: RuntimeConfig) {
+        self.config = config
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Welcome to Fixit"
+        window.isReleasedWhenClosed = false
+        super.init(window: window)
+        window.delegate = self
+        buildContent()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func show() {
+        refreshPermissionStatus()
+        permissionTimer?.invalidate()
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshPermissionStatus()
+            }
+        }
+        window?.center()
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        permissionTimer?.invalidate()
+        permissionTimer = nil
+    }
+
+    // Debug aid for FIXIT_DEBUG_ONBOARDING=1, mirroring the Settings layout dump.
+    func debugDumpLayout() {
+        guard let contentView = window?.contentView else { return }
+        contentView.layoutSubtreeIfNeeded()
+        if let rep = contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds) {
+            contentView.cacheDisplay(in: contentView.bounds, to: rep)
+            if let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: "/tmp/fixit-onboarding-debug.png"))
+            }
+        }
+    }
+
+    private func buildContent() {
+        guard let contentView = window?.contentView else { return }
+        let stack = NSStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor),
+        ])
+
+        addLabel("Fix text anywhere with a keyboard shortcut.", font: .boldSystemFont(ofSize: 16), to: stack)
+        addLabel("Three quick steps and you’re set up.", font: .systemFont(ofSize: 13), color: .secondaryLabelColor, to: stack)
+
+        addLabel("1. Allow Fixit to type for you", font: .boldSystemFont(ofSize: 13), to: stack)
+        addLabel("Fixit copies your selection and pastes the fix, which needs the Accessibility permission.", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, to: stack)
+        let permissionRow = NSStackView()
+        permissionRow.orientation = .horizontal
+        permissionRow.spacing = 10
+        permissionRow.addArrangedSubview(NSButton(title: "Open Accessibility Settings…", target: self, action: #selector(openAccessibilityPressed)))
+        permissionRow.addArrangedSubview(permissionLabel)
+        stack.addArrangedSubview(permissionRow)
+
+        addLabel("2. Connect a model provider", font: .boldSystemFont(ofSize: 13), to: stack)
+        providerPopup.addItems(withTitles: providers.map(\.label))
+        providerPopup.target = self
+        providerPopup.action = #selector(providerChanged)
+        stack.addArrangedSubview(providerPopup)
+        apiKeyField.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        stack.addArrangedSubview(apiKeyField)
+        providerChanged()
+
+        addLabel("3. Try it", font: .boldSystemFont(ofSize: 13), to: stack)
+        sampleField.font = .systemFont(ofSize: 13)
+        sampleField.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        let testRow = NSStackView()
+        testRow.orientation = .horizontal
+        testRow.spacing = 8
+        testRow.addArrangedSubview(sampleField)
+        testRow.addArrangedSubview(NSButton(title: "Test", target: self, action: #selector(testPressed)))
+        stack.addArrangedSubview(testRow)
+        testResultLabel.font = .systemFont(ofSize: 12)
+        testResultLabel.textColor = .secondaryLabelColor
+        testResultLabel.lineBreakMode = .byWordWrapping
+        testResultLabel.maximumNumberOfLines = 3
+        testResultLabel.widthAnchor.constraint(equalToConstant: 560).isActive = true
+        stack.addArrangedSubview(testResultLabel)
+
+        let finishRow = NSStackView()
+        finishRow.orientation = .horizontal
+        finishRow.spacing = 10
+        addLabel("You can change everything later in Settings.", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, to: finishRow)
+        let finish = NSButton(title: "Finish", target: self, action: #selector(finishPressed))
+        finish.keyEquivalent = "\r"
+        finishRow.addArrangedSubview(finish)
+        stack.addArrangedSubview(finishRow)
+    }
+
+    private var selectedProvider: Provider {
+        let index = providerPopup.indexOfSelectedItem
+        return providers.indices.contains(index) ? providers[index] : .openRouter
+    }
+
+    @objc private func providerChanged() {
+        let provider = selectedProvider
+        apiKeyField.stringValue = (try? KeychainStore.apiKey(provider: provider)) ?? ""
+        apiKeyField.placeholderString = provider == .ollama ? "No API key required" : "\(provider.label) API key"
+        apiKeyField.isEnabled = provider != .ollama
+    }
+
+    @objc private func openAccessibilityPressed() {
+        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func testPressed() {
+        do {
+            try persistSetup()
+        } catch {
+            testResultLabel.stringValue = error.localizedDescription
+            return
+        }
+        testResultLabel.stringValue = "Contacting \(selectedProvider.label)…"
+        Task { @MainActor in
+            do {
+                let runtime = try RuntimeConfig.load()
+                let client = OpenAICompatibleClient(config: runtime)
+                let style = runtime.styles.first ?? RuntimeConfig.defaultStyles[0]
+                let prompt = try PromptLoader(config: runtime).prompt(for: style)
+                let fixed = try await client.fix(text: sampleField.stringValue, systemPrompt: prompt)
+                testResultLabel.stringValue = "→ \(fixed.text)"
+            } catch {
+                testResultLabel.stringValue = error.localizedDescription
+            }
+        }
+    }
+
+    @objc private func finishPressed() {
+        do {
+            try persistSetup()
+        } catch {
+            testResultLabel.stringValue = error.localizedDescription
+            return
+        }
+        close()
+        onFinish?()
+    }
+
+    // Writes the provider/key plus a default config.json, so the app is
+    // immediately usable and onboarding never shows again.
+    private func persistSetup() throws {
+        let provider = selectedProvider
+        if provider != .ollama {
+            try KeychainStore.saveAPIKey(apiKeyField.stringValue, provider: provider)
+        }
+        try ConfigStore.save(
+            config: config,
+            styles: RuntimeConfig.defaultStyles,
+            pickerKey: "0",
+            pickerModifiers: ["command", "shift"],
+            prompts: [:],
+            provider: provider,
+            model: nil,
+            endpoint: nil
+        )
+    }
+
+    private func refreshPermissionStatus() {
+        if AXIsProcessTrusted() {
+            permissionLabel.stringValue = "✓ Permission granted"
+            permissionLabel.textColor = .systemGreen
+        } else {
+            permissionLabel.stringValue = "Not granted yet"
+            permissionLabel.textColor = .systemOrange
+        }
+    }
+
+    private func addLabel(_ text: String, font: NSFont, color: NSColor = .labelColor, to stackView: NSStackView) {
+        let label = NSTextField(labelWithString: text)
+        label.font = font
+        label.textColor = color
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 0
+        stackView.addArrangedSubview(label)
+    }
+}
+
 final class HotKeyManager {
     // Style hotkey IDs are index + 1; keep the picker far above that range.
     private static let pickerHotKeyID = 1000
@@ -1903,6 +2117,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var hotKeys: HotKeyManager?
     private var statusItem: NSStatusItem?
     private var settingsWindow: SettingsWindowController?
+    private var onboardingWindow: OnboardingWindowController?
     private var isProcessing = false
     private var currentFixTask: Task<Void, Never>?
     private var lastTargetApp: NSRunningApplication?
@@ -1921,7 +2136,14 @@ final class AppController: NSObject, NSApplicationDelegate {
                 showSettings()
                 settingsWindow?.debugDumpLayout()
             }
-            if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
+            if ProcessInfo.processInfo.environment["FIXIT_DEBUG_ONBOARDING"] == "1" {
+                showOnboarding()
+                onboardingWindow?.debugDumpLayout()
+            }
+            let configFileExists = FileManager.default.fileExists(atPath: config.configDir.appendingPathComponent("config.json").path)
+            if !configFileExists {
+                showOnboarding()
+            } else if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
                 showSettings(message: FixitError.missingAPIKey(config.provider.label).localizedDescription)
             }
         } catch {
@@ -2141,6 +2363,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Setup Guide…", action: #selector(openOnboarding), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         item.menu = menu
         statusItem = item
@@ -2154,6 +2377,29 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         showSettings()
+    }
+
+    @objc private func openOnboarding() {
+        showOnboarding()
+    }
+
+    private func showOnboarding() {
+        if onboardingWindow == nil {
+            onboardingWindow = OnboardingWindowController(config: config)
+            onboardingWindow?.onFinish = { [weak self] in
+                guard let self else { return }
+                do {
+                    try reloadRuntime()
+                    setupMenu()
+                    if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
+                        showSettings(message: FixitError.missingAPIKey(config.provider.label).localizedDescription)
+                    }
+                } catch {
+                    showError(error.localizedDescription)
+                }
+            }
+        }
+        onboardingWindow?.show()
     }
 
     private func showSettings(message: String? = nil) {
