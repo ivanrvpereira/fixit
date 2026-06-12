@@ -10,6 +10,16 @@ struct StyleConfig: Codable {
     let promptFile: String?
     let shortcutKey: String?
     let shortcutModifiers: [String]?
+
+    // IDs must stay unique and stable; new styles take the first free "custom-N" slot.
+    static func uniqueID(existing: [String]) -> String {
+        let taken = Set(existing)
+        var n = 1
+        while taken.contains("custom-\(n)") {
+            n += 1
+        }
+        return "custom-\(n)"
+    }
 }
 
 enum Provider: String, CaseIterable {
@@ -1298,8 +1308,8 @@ final class StylePickerPanel: NSPanel {
 final class SettingsWindowController: NSWindowController {
     private struct StyleEditor {
         let id: String
-        let label: String
         let promptFile: String
+        let labelField: NSTextField
         let shortcutField: NSTextField
         let promptView: NSTextView
     }
@@ -1314,6 +1324,8 @@ final class SettingsWindowController: NSWindowController {
     private var styleEditors: [StyleEditor] = []
     private var collapsedStyleIDs: Set<String>
     private var sectionBodies: [ObjectIdentifier: (styleID: String, body: NSView)] = [:]
+    private var styleBoxes: [String: NSView] = [:]
+    private var addStyleRow: NSView?
     private var currentConfig: RuntimeConfig
     var onSave: (() -> Void)?
 
@@ -1445,6 +1457,7 @@ final class SettingsWindowController: NSWindowController {
         }
         styleEditors.removeAll()
         sectionBodies.removeAll()
+        styleBoxes.removeAll()
 
         let title = NSTextField(labelWithString: "Model Provider")
         title.font = .boldSystemFont(ofSize: 16)
@@ -1464,6 +1477,10 @@ final class SettingsWindowController: NSWindowController {
         for style in config.styles {
             addFilling(styleSection(for: style, config: config), to: stack)
         }
+
+        let addStyleButton = NSButton(title: "Add Style", target: self, action: #selector(addStylePressed))
+        stack.addArrangedSubview(addStyleButton)
+        addStyleRow = addStyleButton
 
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.font = .systemFont(ofSize: 12)
@@ -1522,16 +1539,28 @@ final class SettingsWindowController: NSWindowController {
         disclosure.target = self
         disclosure.action = #selector(styleSectionToggled(_:))
 
-        let sectionTitle = NSTextField(labelWithString: style.label)
-        sectionTitle.font = .boldSystemFont(ofSize: 13)
-        sectionTitle.alignment = .left
+        let labelField = NSTextField(string: style.label)
+        labelField.placeholderString = "Style name"
+        labelField.isBordered = false
+        labelField.drawsBackground = false
+        labelField.font = .boldSystemFont(ofSize: 13)
+        labelField.lineBreakMode = .byTruncatingTail
+        labelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+
+        let removeButton = NSButton(title: "Remove", target: self, action: #selector(removeStylePressed(_:)))
+        removeButton.controlSize = .small
+        removeButton.identifier = NSUserInterfaceItemIdentifier(style.id)
 
         let header = NSStackView()
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 6
         header.addArrangedSubview(disclosure)
-        header.addArrangedSubview(sectionTitle)
+        header.addArrangedSubview(labelField)
+        let headerSpacer = NSView()
+        headerSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        header.addArrangedSubview(headerSpacer)
+        header.addArrangedSubview(removeButton)
         addFilling(header, to: section)
 
         let body = NSStackView()
@@ -1585,14 +1614,41 @@ final class SettingsWindowController: NSWindowController {
         addFilling(promptContainer, to: body)
 
         let promptFile = style.promptFile ?? "styles/\(style.id).md"
-        styleEditors.append(StyleEditor(id: style.id, label: style.label, promptFile: promptFile, shortcutField: shortcutField, promptView: promptView))
+        styleEditors.append(StyleEditor(id: style.id, promptFile: promptFile, labelField: labelField, shortcutField: shortcutField, promptView: promptView))
+        styleBoxes[style.id] = box
         return box
+    }
+
+    @objc private func addStylePressed() {
+        let id = StyleConfig.uniqueID(existing: styleEditors.map(\.id))
+        let style = StyleConfig(id: id, label: "New style", promptFile: "styles/\(id).md", shortcutKey: nil, shortcutModifiers: nil)
+        guard let addStyleRow, let index = stack.arrangedSubviews.firstIndex(of: addStyleRow) else { return }
+        addFilling(styleSection(for: style, config: currentConfig), to: stack, at: index)
+        window?.makeFirstResponder(styleEditors.last?.labelField)
+    }
+
+    // Removal only takes effect on Save, like every other edit in this window.
+    @objc private func removeStylePressed(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        guard styleEditors.count > 1 else {
+            statusLabel.stringValue = "Keep at least one style."
+            return
+        }
+        guard let box = styleBoxes.removeValue(forKey: id) else { return }
+        stack.removeArrangedSubview(box)
+        box.removeFromSuperview()
+        styleEditors.removeAll { $0.id == id }
+        sectionBodies = sectionBodies.filter { $0.value.styleID != id }
     }
 
     // NSStackView alignment constraints are created at priority 250, so `.width` does not
     // reliably stretch arranged subviews; pin each child's width to the stack explicitly.
-    private func addFilling(_ view: NSView, to stackView: NSStackView) {
-        stackView.addArrangedSubview(view)
+    private func addFilling(_ view: NSView, to stackView: NSStackView, at index: Int? = nil) {
+        if let index {
+            stackView.insertArrangedSubview(view, at: index)
+        } else {
+            stackView.addArrangedSubview(view)
+        }
         let insets = stackView.edgeInsets
         view.widthAnchor.constraint(equalTo: stackView.widthAnchor, constant: -(insets.left + insets.right)).isActive = true
     }
@@ -1650,9 +1706,10 @@ final class SettingsWindowController: NSWindowController {
             var prompts: [String: String] = [:]
             for editor in styleEditors {
                 let shortcut = try ShortcutParser.parse(editor.shortcutField.stringValue)
+                let label = editor.labelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 styles.append(StyleConfig(
                     id: editor.id,
-                    label: editor.label,
+                    label: label.isEmpty ? "Style" : label,
                     promptFile: editor.promptFile,
                     shortcutKey: shortcut.key,
                     shortcutModifiers: shortcut.modifiers

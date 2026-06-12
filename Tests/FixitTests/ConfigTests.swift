@@ -28,6 +28,17 @@ import Testing
     }
 }
 
+@Suite struct StyleIDTests {
+    @Test func firstCustomStyleGetsSlotOne() {
+        #expect(StyleConfig.uniqueID(existing: ["native", "rewrite"]) == "custom-1")
+    }
+
+    @Test func picksFirstFreeSlot() {
+        #expect(StyleConfig.uniqueID(existing: ["custom-1", "custom-3"]) == "custom-2")
+        #expect(StyleConfig.uniqueID(existing: ["custom-1", "custom-2"]) == "custom-3")
+    }
+}
+
 @Suite struct ProviderTests {
     @Test func parsesCaseInsensitivelyWithWhitespace() {
         #expect(Provider.from(" OpenRouter ") == .openRouter)
