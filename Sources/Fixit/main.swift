@@ -632,6 +632,7 @@ struct OpenAICompatibleClient {
         let model: String
         let messages: [Message]
         let temperature: Double
+        let stream: Bool
     }
 
     struct ResponseBody: Decodable {
@@ -654,7 +655,8 @@ struct OpenAICompatibleClient {
         let code: String?
     }
 
-    func fix(text: String, systemPrompt: String) async throws -> (text: String, cost: Double?) {
+    /// Streams the completion; `onProgress` receives the accumulated text after each delta.
+    func fix(text: String, systemPrompt: String, onProgress: (@MainActor @Sendable (String) -> Void)? = nil) async throws -> (text: String, cost: Double?) {
         let provider = config.provider
         let apiKey = try CredentialStore.apiKey(for: config)
         if provider.requiresAPIKey, (apiKey ?? "").isEmpty {
@@ -679,22 +681,76 @@ struct OpenAICompatibleClient {
                 .init(role: "system", content: systemPrompt),
                 .init(role: "user", content: text),
             ],
-            temperature: 0.1
+            temperature: 0.1,
+            stream: true
         ))
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let decoded = try? JSONDecoder().decode(ResponseBody.self, from: data)
-        if !(200..<300).contains(statusCode) {
-            if statusCode == 401 || statusCode == 403 {
-                throw FixitError.invalidAPIKey(decoded?.error?.message ?? "\(provider.label) rejected the API key.")
-            }
-            if let message = decoded?.error?.message {
-                throw FixitError.api("\(provider.label) error: \(message)")
-            }
-            let body = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
-            throw FixitError.api("\(provider.label) error: \(body)")
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let http = response as? HTTPURLResponse
+        let statusCode = http?.statusCode ?? 0
+        guard (200..<300).contains(statusCode) else {
+            throw apiError(statusCode: statusCode, data: try await collect(bytes))
         }
+
+        let contentType = http?.value(forHTTPHeaderField: "Content-Type") ?? ""
+        guard contentType.contains("text/event-stream") else {
+            // The endpoint ignored the stream flag (some custom proxies do); parse one JSON body.
+            return try parseSingleResponse(data: try await collect(bytes))
+        }
+
+        var full = ""
+        var cost: Double?
+        stream: for try await line in bytes.lines {
+            switch SSELine.parse(line) {
+            case .done:
+                break stream
+            case .chunk(let content, let chunkCost):
+                if let content, !content.isEmpty {
+                    full += content
+                    if let onProgress {
+                        await onProgress(full)
+                    }
+                }
+                if let chunkCost {
+                    cost = chunkCost
+                }
+            case .error(let message):
+                throw FixitError.api("\(provider.label) error: \(message)")
+            case .ignored:
+                continue
+            }
+        }
+        let result = full.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !result.isEmpty else {
+            throw FixitError.api("\(provider.label) returned no corrected text.")
+        }
+        return (result, cost)
+    }
+
+    private func collect(_ bytes: URLSession.AsyncBytes) async throws -> Data {
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+        }
+        return data
+    }
+
+    private func apiError(statusCode: Int, data: Data) -> FixitError {
+        let provider = config.provider
+        let decoded = try? JSONDecoder().decode(ResponseBody.self, from: data)
+        if statusCode == 401 || statusCode == 403 {
+            return .invalidAPIKey(decoded?.error?.message ?? "\(provider.label) rejected the API key.")
+        }
+        if let message = decoded?.error?.message {
+            return .api("\(provider.label) error: \(message)")
+        }
+        let body = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
+        return .api("\(provider.label) error: \(body)")
+    }
+
+    private func parseSingleResponse(data: Data) throws -> (text: String, cost: Double?) {
+        let provider = config.provider
+        let decoded = try? JSONDecoder().decode(ResponseBody.self, from: data)
         if let message = decoded?.error?.message {
             throw FixitError.api("\(provider.label) error: \(message)")
         }
@@ -702,6 +758,41 @@ struct OpenAICompatibleClient {
             throw FixitError.api("\(provider.label) returned no corrected text.")
         }
         return (result, decoded?.usage?.cost)
+    }
+}
+
+// One server-sent-events line from a chat-completions stream.
+enum SSELine: Equatable {
+    case done
+    case chunk(content: String?, cost: Double?)
+    case error(String)
+    case ignored
+
+    private struct Payload: Decodable {
+        struct Choice: Decodable {
+            struct Delta: Decodable {
+                let content: String?
+            }
+            let delta: Delta?
+        }
+        let choices: [Choice]?
+        let usage: OpenAICompatibleClient.ResponseBody.Usage?
+        let error: OpenAICompatibleClient.APIError?
+    }
+
+    static func parse(_ line: String) -> SSELine {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("data:") else { return .ignored }
+        let payload = trimmed.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+        if payload == "[DONE]" { return .done }
+        guard let data = payload.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(Payload.self, from: data) else {
+            return .ignored
+        }
+        if let message = decoded.error?.message {
+            return .error(message)
+        }
+        return .chunk(content: decoded.choices?.first?.delta?.content, cost: decoded.usage?.cost)
     }
 }
 
@@ -900,9 +991,11 @@ final class OverlayPanel: NSPanel {
     private let stack = NSStackView()
     private var fixedTextForCopy = ""
     private var refineField: NSTextField?
+    private var streamingView: NSTextView?
     var onAccept: (() -> Void)?
     var onDismiss: (() -> Void)?
     var onRefine: ((String) -> Void)?
+    var onCancel: (() -> Void)?
 
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 680, height: 410), styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -920,23 +1013,41 @@ final class OverlayPanel: NSPanel {
         rebuild {
             label(title, font: .boldSystemFont(ofSize: 16))
             label(subtitle, font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
+
+            let (scrollView, textView) = makeTextPane(height: 180)
+            textView.textColor = .secondaryLabelColor
+            streamingView = textView
+            stack.addArrangedSubview(scrollView)
+
+            let buttons = NSStackView()
+            buttons.orientation = .horizontal
+            buttons.alignment = .centerY
+            buttons.spacing = 8
+            let spacer = NSView()
+            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            buttons.addArrangedSubview(spacer)
+            let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelPressed))
+            cancel.keyEquivalent = "\u{1b}"
+            buttons.addArrangedSubview(cancel)
+            stack.addArrangedSubview(buttons)
         }
         showCentered()
     }
 
+    // Streamed tokens land here while the request is in flight.
+    func updateStreaming(text: String) {
+        guard let streamingView else { return }
+        streamingView.string = text
+        streamingView.scrollToEndOfDocument(nil)
+    }
+
     func showResult(original: String, fixed: String) {
+        onCancel = nil
         fixedTextForCopy = fixed
         rebuild {
             label("Review the edit", font: .boldSystemFont(ofSize: 16))
-            let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 245))
+            let (scrollView, textView) = makeTextPane(height: 245)
             textView.textStorage?.setAttributedString(InlineDiffBuilder.attributedDiff(original: original, fixed: fixed, font: .systemFont(ofSize: 14)))
-            textView.isEditable = false
-            textView.isSelectable = true
-            textView.textContainerInset = NSSize(width: 8, height: 8)
-            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 245))
-            scrollView.hasVerticalScroller = true
-            scrollView.autohidesScrollers = true
-            scrollView.documentView = textView
             stack.addArrangedSubview(scrollView)
 
             if original == fixed {
@@ -982,6 +1093,7 @@ final class OverlayPanel: NSPanel {
     }
 
     func showError(_ message: String) {
+        onCancel = nil
         rebuild {
             label("Fixit failed", font: .boldSystemFont(ofSize: 16))
             label(message, font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
@@ -1016,18 +1128,52 @@ final class OverlayPanel: NSPanel {
         onRefine?(instruction)
     }
 
+    @objc private func cancelPressed() {
+        orderOut(nil)
+        onCancel?()
+    }
+
+    // Esc cancels an in-flight request, otherwise just dismisses.
+    override func cancelOperation(_ sender: Any?) {
+        orderOut(nil)
+        if let onCancel {
+            onCancel()
+        } else {
+            onDismiss?()
+        }
+    }
+
     override func close() {
         orderOut(nil)
-        onDismiss?()
+        if let onCancel {
+            onCancel()
+        } else {
+            onDismiss?()
+        }
     }
 
     private func rebuild(_ build: () -> Void) {
         refineField = nil
+        streamingView = nil
         stack.arrangedSubviews.forEach { view in
             stack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
         build()
+    }
+
+    private func makeTextPane(height: CGFloat) -> (NSScrollView, NSTextView) {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: height))
+        textView.font = .systemFont(ofSize: 14)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: height))
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = textView
+        scrollView.heightAnchor.constraint(equalToConstant: height).isActive = true
+        return (scrollView, textView)
     }
 
     private func label(_ text: String, font: NSFont, color: NSColor = .labelColor) {
@@ -1679,6 +1825,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var settingsWindow: SettingsWindowController?
     private var isProcessing = false
+    private var currentFixTask: Task<Void, Never>?
     private var lastTargetApp: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1786,20 +1933,31 @@ final class AppController: NSObject, NSApplicationDelegate {
         guard !isProcessing else { return }
         isProcessing = true
 
-        Task { @MainActor in
+        overlay.onCancel = { [weak self] in
+            self?.logger.log("fix cancelled")
+            self?.currentFixTask?.cancel()
+        }
+        overlay.showLoading(title: loadingTitle, subtitle: "Calling \(config.provider.label)")
+        currentFixTask = Task { @MainActor in
             do {
-                overlay.showLoading(title: loadingTitle, subtitle: "Calling \(config.provider.label)")
                 try await runFix(systemPrompt: systemPrompt, input: input, session: session)
+            } catch is CancellationError {
+                overlay.hide()
+            } catch let error as URLError where error.code == .cancelled {
+                overlay.hide()
             } catch {
                 handleTriggerError(error)
             }
             isProcessing = false
+            currentFixTask = nil
         }
     }
 
     private func runFix(systemPrompt: String, input: String, session: TextTargetSession) async throws {
         let started = Date()
-        let fixed = try await client.fix(text: input, systemPrompt: systemPrompt)
+        let fixed = try await client.fix(text: input, systemPrompt: systemPrompt) { [weak self] partial in
+            self?.overlay.updateStreaming(text: partial)
+        }
         logger.log("fix complete", ["durationMs": Int(Date().timeIntervalSince(started) * 1000), "inputLength": input.count, "outputLength": fixed.text.count, "cost": fixed.cost ?? 0])
         overlay.onAccept = { [weak self] in
             do {
