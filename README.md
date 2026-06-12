@@ -17,9 +17,10 @@
 
 ## Features
 
-- ⚡ **Works everywhere** — system-wide hotkeys fix selected text in any app: Slack, Mail, your browser, your editor.
+- ⚡ **Works everywhere** — system-wide hotkeys fix selected text in any app: Slack, Mail, your browser, your editor. Nothing selected? Fixit falls back to your clipboard.
 - ✍️ **Three built-in styles** — sound native (`⌘⇧1`), rewrite aggressively (`⌘⇧2`), or correct minimally (`⌘⇧3`), plus a style picker on `⌘⇧0`.
-- 🎛️ **Fully customizable** — every style is just a Markdown prompt and a shortcut. Edit them, add your own.
+- 🎛️ **Fully customizable** — every style is just a Markdown prompt and a shortcut. Edit, rename, add, or remove styles right in Settings.
+- 📡 **Streaming with cancel** — watch the fix arrive token by token; press Esc to cancel mid-flight.
 - 🤖 **Bring your own model** — talks directly to [OpenRouter](https://openrouter.ai), so you can use any model and pay only for what you use. No subscription, no middleman server.
 - 🔐 **Keys stay in your Keychain** — the API key and model are stored in the macOS login Keychain, not in plain-text config.
 - 👻 **Lightweight** — a small menu-bar app with no Dock icon, plus a CLI mode for scripting and testing.
@@ -54,9 +55,7 @@ See [BUILDING.md](BUILDING.md) for details, troubleshooting, and manual steps.
 
 ### First run
 
-1. Open **Fixit** — it appears in the menu bar.
-2. Grant **Accessibility** permission when prompted (System Settings → Privacy & Security → Accessibility). Fixit needs it to copy your selection and paste the result — that's all it's used for.
-3. Open **Settings…** from the menu-bar icon and paste your [OpenRouter API key](https://openrouter.ai/keys) and a model name (e.g. `openai/gpt-4.1-mini`).
+On first launch Fixit opens a short setup guide: grant the **Accessibility** permission (used only to copy your selection and paste the result), pick a provider, paste your API key (e.g. an [OpenRouter key](https://openrouter.ai/keys)), and test a sample fix. You can rerun it anytime from **Setup Guide…** in the menu bar, and tweak everything else (styles, shortcuts, launch at login) in **Settings…**.
 
 That's it — select some text and press `⌘⇧1`.
 
