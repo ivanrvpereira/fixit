@@ -3,6 +3,7 @@ import ApplicationServices
 import Carbon
 import Foundation
 @preconcurrency import Security
+import ServiceManagement
 
 struct StyleConfig: Codable {
     let id: String
@@ -1319,6 +1320,7 @@ final class SettingsWindowController: NSWindowController {
     private let modelField = NSTextField()
     private let pickerShortcutField = NSTextField()
     private let endpointField = NSTextField()
+    private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch Fixit at login", target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "")
     private let stack = NSStackView()
     private var styleEditors: [StyleEditor] = []
@@ -1360,6 +1362,7 @@ final class SettingsWindowController: NSWindowController {
         }
         rebuildStyleEditors(config: config)
         applyProviderSelection(config.provider)
+        launchAtLoginCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
         statusLabel.stringValue = "API keys are stored in your login Keychain. Shortcuts and prompts are stored in \(config.configDir.path)."
     }
 
@@ -1469,6 +1472,7 @@ final class SettingsWindowController: NSWindowController {
         pickerShortcutField.stringValue = ShortcutParser.display(key: config.pickerKey, modifiers: config.pickerModifiers)
         addFilling(row(label: "Picker", field: pickerShortcutField), to: stack)
         addFilling(row(label: "Endpoint", field: endpointField), to: stack)
+        addFilling(launchAtLoginCheckbox, to: stack)
 
         let stylesTitle = NSTextField(labelWithString: "Styles")
         stylesTitle.font = .boldSystemFont(ofSize: 16)
@@ -1736,10 +1740,26 @@ final class SettingsWindowController: NSWindowController {
             )
 
             statusLabel.stringValue = "Saved."
+            applyLaunchAtLogin(enabled: launchAtLoginCheckbox.state == .on)
             onSave?()
             window?.orderOut(nil)
         } catch {
             statusLabel.stringValue = error.localizedDescription
+        }
+    }
+
+    // SMAppService only works from an installed app bundle; a failure here
+    // (e.g. running via `swift run`) should not abort the rest of the save.
+    private func applyLaunchAtLogin(enabled: Bool) {
+        let service = SMAppService.mainApp
+        do {
+            if enabled, service.status != .enabled {
+                try service.register()
+            } else if !enabled, service.status == .enabled {
+                try service.unregister()
+            }
+        } catch {
+            statusLabel.stringValue = "Launch at login unavailable: \(error.localizedDescription)"
         }
     }
 }
