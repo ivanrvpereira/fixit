@@ -877,19 +877,20 @@ enum TextSelectionIO {
         }
     }
 
-    static func captureSelection() throws -> TextTargetSession {
+    @MainActor
+    static func captureSelection() async throws -> TextTargetSession {
         try ensureAccessibility()
         let sourceApp = NSWorkspace.shared.frontmostApplication
         let pasteboard = NSPasteboard.general
         let snapshot = PasteboardSnapshot.capture(from: pasteboard)
-        let initialChangeCount = pasteboard.changeCount
-        pasteboard.clearContents()
+        // clearContents() bumps the change count, so the baseline must come from its return value.
+        let clearedChangeCount = pasteboard.clearContents()
         simulateKey(virtualKey: CGKeyCode(kVK_ANSI_C), flags: .maskCommand)
 
         var text = ""
         for _ in 0..<20 {
-            Thread.sleep(forTimeInterval: 0.05)
-            if pasteboard.changeCount > initialChangeCount {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if pasteboard.changeCount > clearedChangeCount {
                 text = pasteboard.string(forType: .string) ?? ""
                 if !text.isEmpty { break }
             }
@@ -901,18 +902,19 @@ enum TextSelectionIO {
         return TextTargetSession(originalText: text, sourceApp: sourceApp)
     }
 
-    static func replaceSelectedText(with text: String, in session: TextTargetSession) throws {
+    @MainActor
+    static func replaceSelectedText(with text: String, in session: TextTargetSession) async throws {
         try ensureAccessibility()
         session.sourceApp?.activate()
-        Thread.sleep(forTimeInterval: 0.3)
+        try await Task.sleep(nanoseconds: 300_000_000)
 
         let pasteboard = NSPasteboard.general
         let snapshot = PasteboardSnapshot.capture(from: pasteboard)
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-        Thread.sleep(forTimeInterval: 0.08)
+        try await Task.sleep(nanoseconds: 80_000_000)
         simulateKey(virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
-        Thread.sleep(forTimeInterval: 0.75)
+        try await Task.sleep(nanoseconds: 750_000_000)
         snapshot.restore(to: pasteboard)
     }
 
@@ -2186,6 +2188,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     func trigger(style: StyleConfig, fromMenu: Bool = false) {
         guard !isProcessing else { return }
+        isProcessing = true
         logger.log("trigger start", ["styleId": style.id, "fromMenu": fromMenu])
 
         Task { @MainActor in
@@ -2196,9 +2199,9 @@ final class AppController: NSObject, NSApplicationDelegate {
                 if fromMenu {
                     await refocusTargetApp()
                 }
-                let session = try captureSession()
+                let session = try await captureSession()
                 let systemPrompt = try promptLoader.prompt(for: style)
-                startFix(
+                await performFix(
                     systemPrompt: systemPrompt,
                     input: session.originalText,
                     session: session,
@@ -2207,42 +2210,47 @@ final class AppController: NSObject, NSApplicationDelegate {
             } catch {
                 handleTriggerError(error)
             }
+            isProcessing = false
         }
     }
 
     func showStylePicker() {
         guard !isProcessing else { return }
-        do {
-            if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
-                throw FixitError.missingAPIKey(config.provider.label)
-            }
-            // Capture while the target app is still frontmost; Esc later means nothing happened.
-            let session = try captureSession()
-            stylePicker.onPick = { [weak self] style in
-                guard let self else { return }
-                do {
-                    let systemPrompt = try self.promptLoader.prompt(for: style)
-                    self.startFix(systemPrompt: systemPrompt, input: session.originalText, session: session)
-                } catch {
-                    self.handleTriggerError(error)
+        isProcessing = true
+        Task { @MainActor in
+            do {
+                if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
+                    throw FixitError.missingAPIKey(config.provider.label)
                 }
+                // Capture while the target app is still frontmost; Esc later means nothing happened.
+                let session = try await captureSession()
+                stylePicker.onPick = { [weak self] style in
+                    guard let self else { return }
+                    do {
+                        let systemPrompt = try self.promptLoader.prompt(for: style)
+                        self.startFix(systemPrompt: systemPrompt, input: session.originalText, session: session)
+                    } catch {
+                        self.handleTriggerError(error)
+                    }
+                }
+                stylePicker.onCustom = { [weak self] instruction in
+                    guard let self else { return }
+                    self.startFix(systemPrompt: PromptLoader.customInstructionPrompt(instruction), input: session.originalText, session: session, loadingTitle: "Applying your instruction…")
+                }
+                stylePicker.show(styles: config.styles)
+                logger.log("picker open", ["styles": config.styles.count])
+            } catch {
+                handleTriggerError(error)
             }
-            stylePicker.onCustom = { [weak self] instruction in
-                guard let self else { return }
-                self.startFix(systemPrompt: PromptLoader.customInstructionPrompt(instruction), input: session.originalText, session: session, loadingTitle: "Applying your instruction…")
-            }
-            stylePicker.show(styles: config.styles)
-            logger.log("picker open", ["styles": config.styles.count])
-        } catch {
-            handleTriggerError(error)
+            isProcessing = false
         }
     }
 
     // Nothing selected usually means the hotkey was pressed without a selection;
     // fall back to fixing the clipboard contents so the press still does something useful.
-    private func captureSession() throws -> TextTargetSession {
+    private func captureSession() async throws -> TextTargetSession {
         do {
-            return try TextSelectionIO.captureSelection()
+            return try await TextSelectionIO.captureSelection()
         } catch FixitError.noSelection {
             let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
             guard !clipboard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -2286,13 +2294,20 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func startFix(systemPrompt: String, input: String, session: TextTargetSession, loadingTitle: String = "Fixing selected text…") {
         guard !isProcessing else { return }
         isProcessing = true
+        Task { @MainActor in
+            await performFix(systemPrompt: systemPrompt, input: input, session: session, loadingTitle: loadingTitle)
+            isProcessing = false
+        }
+    }
 
+    // Callers own the isProcessing flag; this wires cancellation, runs the request, and presents the outcome.
+    private func performFix(systemPrompt: String, input: String, session: TextTargetSession, loadingTitle: String = "Fixing selected text…") async {
         overlay.onCancel = { [weak self] in
             self?.logger.log("fix cancelled")
             self?.currentFixTask?.cancel()
         }
         overlay.showLoading(title: loadingTitle, subtitle: "Calling \(config.provider.label)")
-        currentFixTask = Task { @MainActor in
+        let task = Task { @MainActor in
             do {
                 try await runFix(systemPrompt: systemPrompt, input: input, session: session)
             } catch is CancellationError {
@@ -2302,9 +2317,10 @@ final class AppController: NSObject, NSApplicationDelegate {
             } catch {
                 handleTriggerError(error)
             }
-            isProcessing = false
-            currentFixTask = nil
         }
+        currentFixTask = task
+        await task.value
+        currentFixTask = nil
     }
 
     private func runFix(systemPrompt: String, input: String, session: TextTargetSession) async throws {
@@ -2315,10 +2331,12 @@ final class AppController: NSObject, NSApplicationDelegate {
         logger.log("fix complete", ["durationMs": Int(Date().timeIntervalSince(started) * 1000), "inputLength": input.count, "outputLength": fixed.text.count, "cost": fixed.cost ?? 0])
         overlay.onAccept = { [weak self] in
             if session.replacesSelection {
-                do {
-                    try TextSelectionIO.replaceSelectedText(with: fixed.text, in: session)
-                } catch {
-                    self?.showError(error.localizedDescription)
+                Task { @MainActor in
+                    do {
+                        try await TextSelectionIO.replaceSelectedText(with: fixed.text, in: session)
+                    } catch {
+                        self?.showError(error.localizedDescription)
+                    }
                 }
             } else {
                 let pasteboard = NSPasteboard.general
