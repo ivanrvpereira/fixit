@@ -1330,44 +1330,56 @@ final class StylePickerPanel: NSPanel {
 }
 
 @MainActor
-final class SettingsWindowController: NSWindowController {
-    private struct StyleEditor {
+final class SettingsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+    /// In-memory draft of one style. Edits only persist on Save, like everything else in this window.
+    private final class StyleDraft {
         let id: String
         let promptFile: String
-        let labelField: NSTextField
-        let shortcutField: NSTextField
-        let promptView: NSTextView
+        var label: String
+        var shortcut: String
+        var prompt: String
+
+        init(id: String, promptFile: String, label: String, shortcut: String, prompt: String) {
+            self.id = id
+            self.promptFile = promptFile
+            self.label = label
+            self.shortcut = shortcut
+            self.prompt = prompt
+        }
     }
 
     private let providerPopup = NSPopUpButton()
     private let apiKeyField = NSSecureTextField()
     private let modelField = NSTextField()
-    private let pickerShortcutField = NSTextField()
     private let endpointField = NSTextField()
+    private let pickerShortcutField = NSTextField()
     private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch Fixit at login", target: nil, action: nil)
-    private let statusLabel = NSTextField(labelWithString: "")
-    private let stack = NSStackView()
-    private var styleEditors: [StyleEditor] = []
-    private var collapsedStyleIDs: Set<String>
-    private var sectionBodies: [ObjectIdentifier: (styleID: String, body: NSView)] = [:]
-    private var styleBoxes: [String: NSView] = [:]
-    private var addStyleRow: NSView?
+
+    private let styleTable = NSTableView()
+    private let addRemoveControl = NSSegmentedControl()
+    private let styleNameField = NSTextField()
+    private let styleShortcutField = NSTextField()
+    private let promptView = NSTextView()
+    private let statusLabel = NSTextField(wrappingLabelWithString: "")
+
+    private var styleDrafts: [StyleDraft] = []
+    private var displayedStyle: StyleDraft?
     private var currentConfig: RuntimeConfig
     var onSave: (() -> Void)?
 
     init(config: RuntimeConfig) {
         currentConfig = config
-        collapsedStyleIDs = Set(config.styles.map(\.id))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1040, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 560),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Fixit Settings"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 860, height: 520)
+        window.minSize = NSSize(width: 620, height: 480)
         super.init(window: window)
+
         providerPopup.addItems(withTitles: Provider.allCases.map(\.label))
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
@@ -1384,8 +1396,9 @@ final class SettingsWindowController: NSWindowController {
         if let index = Provider.allCases.firstIndex(of: config.provider) {
             providerPopup.selectItem(at: index)
         }
-        rebuildStyleEditors(config: config)
+        rebuildStyleDrafts(config: config)
         applyProviderSelection(config.provider)
+        pickerShortcutField.stringValue = ShortcutParser.display(key: config.pickerKey, modifiers: config.pickerModifiers)
         launchAtLoginCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
         statusLabel.stringValue = "API keys are stored in your login Keychain. Shortcuts and prompts are stored in \(config.configDir.path)."
     }
@@ -1419,8 +1432,8 @@ final class SettingsWindowController: NSWindowController {
     func debugDumpLayout() {
         guard let window, let contentView = window.contentView else { return }
         contentView.layoutSubtreeIfNeeded()
-        var lines = ["contentView: \(contentView.frame)", "stack: \(stack.frame)"]
-        for view in stack.arrangedSubviews {
+        var lines = ["contentView: \(contentView.frame)"]
+        for view in contentView.subviews {
             lines.append("  \(type(of: view)): \(view.frame)")
         }
         FileHandle.standardError.write(Data((lines.joined(separator: "\n") + "\n").utf8))
@@ -1447,268 +1460,292 @@ final class SettingsWindowController: NSWindowController {
 
     private func buildContent() {
         guard let contentView = window?.contentView else { return }
-        let scrollView = NSScrollView()
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.hasVerticalScroller = true
-        contentView.addSubview(scrollView)
 
-        let documentView = NSView()
-        documentView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.documentView = documentView
-
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.distribution = .fill
-        stack.spacing = 16
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        documentView.addSubview(stack)
-
-        NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            documentView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-            stack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: documentView.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
-        ])
-    }
-
-    private func rebuildStyleEditors(config: RuntimeConfig) {
-        stack.arrangedSubviews.forEach { view in
-            stack.removeArrangedSubview(view)
-            view.removeFromSuperview()
+        func formLabel(_ text: String) -> NSTextField {
+            let label = NSTextField(labelWithString: text)
+            label.alignment = .right
+            // Hug tightly so grid columns give all extra width to the fields, not the labels.
+            label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            return label
         }
-        styleEditors.removeAll()
-        sectionBodies.removeAll()
-        styleBoxes.removeAll()
 
-        let title = NSTextField(labelWithString: "Model Provider")
-        title.font = .boldSystemFont(ofSize: 16)
-        addFilling(title, to: stack)
-        addFilling(row(label: "Provider", field: providerPopup), to: stack)
-        addFilling(row(label: "API key", field: apiKeyField), to: stack)
-        addFilling(row(label: "Model", field: modelField), to: stack)
         pickerShortcutField.placeholderString = "cmd+shift+0"
-        pickerShortcutField.stringValue = ShortcutParser.display(key: config.pickerKey, modifiers: config.pickerModifiers)
-        addFilling(row(label: "Picker", field: pickerShortcutField), to: stack)
-        addFilling(row(label: "Endpoint", field: endpointField), to: stack)
-        addFilling(launchAtLoginCheckbox, to: stack)
-
-        let stylesTitle = NSTextField(labelWithString: "Styles")
-        stylesTitle.font = .boldSystemFont(ofSize: 16)
-        addFilling(stylesTitle, to: stack)
-
-        for style in config.styles {
-            addFilling(styleSection(for: style, config: config), to: stack)
+        for field in [apiKeyField, modelField, endpointField, pickerShortcutField, styleNameField, styleShortcutField] {
+            field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
 
-        let addStyleButton = NSButton(title: "Add Style", target: self, action: #selector(addStylePressed))
-        stack.addArrangedSubview(addStyleButton)
-        addStyleRow = addStyleButton
+        let formGrid = NSGridView(views: [
+            [formLabel("Provider:"), providerPopup],
+            [formLabel("API Key:"), apiKeyField],
+            [formLabel("Model:"), modelField],
+            [formLabel("Endpoint:"), endpointField],
+            [formLabel("Picker Shortcut:"), pickerShortcutField],
+            [NSGridCell.emptyContentView, launchAtLoginCheckbox],
+        ])
+        formGrid.translatesAutoresizingMaskIntoConstraints = false
+        formGrid.rowSpacing = 8
+        formGrid.columnSpacing = 10
+        formGrid.rowAlignment = .firstBaseline
+        formGrid.column(at: 0).xPlacement = .trailing
+        formGrid.column(at: 1).xPlacement = .fill
+        formGrid.cell(for: providerPopup)?.xPlacement = .leading
+        formGrid.cell(for: launchAtLoginCheckbox)?.xPlacement = .leading
 
-        statusLabel.textColor = .secondaryLabelColor
-        statusLabel.font = .systemFont(ofSize: 12)
-        statusLabel.lineBreakMode = .byWordWrapping
-        statusLabel.maximumNumberOfLines = 3
-        addFilling(statusLabel, to: stack)
 
-        let buttons = NSStackView()
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        buttons.addArrangedSubview(spacer)
-        buttons.addArrangedSubview(NSButton(title: "Cancel", target: self, action: #selector(cancelPressed)))
-        let saveButton = NSButton(title: "Save", target: self, action: #selector(savePressed))
-        saveButton.keyEquivalent = "\r"
-        buttons.addArrangedSubview(saveButton)
-        addFilling(buttons, to: stack)
-    }
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
 
-    private func styleSection(for style: StyleConfig, config: RuntimeConfig) -> NSView {
-        let box = NSBox()
-        box.translatesAutoresizingMaskIntoConstraints = false
-        box.title = ""
-        box.titlePosition = .noTitle
-        box.boxType = .primary
-        box.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        box.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let stylesHeader = NSTextField(labelWithString: "Styles")
+        stylesHeader.font = .boldSystemFont(ofSize: 13)
+        stylesHeader.translatesAutoresizingMaskIntoConstraints = false
 
-        let section = NSStackView()
-        section.translatesAutoresizingMaskIntoConstraints = false
-        section.orientation = .vertical
-        section.alignment = .leading
-        section.distribution = .fill
-        section.spacing = 10
-        section.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 10, right: 10)
-        // Keep hidden bodies in the hierarchy so their width constraints survive collapse/expand.
-        section.detachesHiddenViews = false
-        box.contentView?.addSubview(section)
-        if let contentView = box.contentView {
-            NSLayoutConstraint.activate([
-                section.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-                section.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-                section.topAnchor.constraint(equalTo: contentView.topAnchor),
-                section.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            ])
-        }
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("style"))
+        styleTable.addTableColumn(column)
+        styleTable.headerView = nil
+        styleTable.rowHeight = 22
+        styleTable.style = .fullWidth
+        styleTable.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+        styleTable.allowsEmptySelection = false
+        styleTable.dataSource = self
+        styleTable.delegate = self
 
-        let isCollapsed = collapsedStyleIDs.contains(style.id)
+        let tableScroll = NSScrollView()
+        tableScroll.translatesAutoresizingMaskIntoConstraints = false
+        tableScroll.documentView = styleTable
+        tableScroll.hasVerticalScroller = true
+        tableScroll.borderType = .bezelBorder
 
-        let disclosure = NSButton()
-        disclosure.bezelStyle = .disclosure
-        disclosure.setButtonType(.pushOnPushOff)
-        disclosure.title = ""
-        disclosure.state = isCollapsed ? .off : .on
-        disclosure.target = self
-        disclosure.action = #selector(styleSectionToggled(_:))
+        addRemoveControl.segmentStyle = .smallSquare
+        addRemoveControl.trackingMode = .momentary
+        addRemoveControl.segmentCount = 2
+        addRemoveControl.setImage(NSImage(systemSymbolName: "plus", accessibilityDescription: "Add style"), forSegment: 0)
+        addRemoveControl.setImage(NSImage(systemSymbolName: "minus", accessibilityDescription: "Remove style"), forSegment: 1)
+        addRemoveControl.setWidth(28, forSegment: 0)
+        addRemoveControl.setWidth(28, forSegment: 1)
+        addRemoveControl.target = self
+        addRemoveControl.action = #selector(addRemovePressed(_:))
+        addRemoveControl.translatesAutoresizingMaskIntoConstraints = false
 
-        let labelField = NSTextField(string: style.label)
-        labelField.placeholderString = "Style name"
-        labelField.isBordered = false
-        labelField.drawsBackground = false
-        labelField.font = .boldSystemFont(ofSize: 13)
-        labelField.lineBreakMode = .byTruncatingTail
-        labelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        styleNameField.placeholderString = "Style name"
+        styleNameField.delegate = self
+        styleShortcutField.placeholderString = "cmd+shift+1"
 
-        let removeButton = NSButton(title: "Remove", target: self, action: #selector(removeStylePressed(_:)))
-        removeButton.controlSize = .small
-        removeButton.identifier = NSUserInterfaceItemIdentifier(style.id)
+        let detailGrid = NSGridView(views: [
+            [formLabel("Name:"), styleNameField],
+            [formLabel("Shortcut:"), styleShortcutField],
+        ])
+        detailGrid.translatesAutoresizingMaskIntoConstraints = false
+        detailGrid.rowSpacing = 8
+        detailGrid.columnSpacing = 10
+        detailGrid.rowAlignment = .firstBaseline
+        detailGrid.column(at: 0).xPlacement = .trailing
+        detailGrid.column(at: 1).xPlacement = .fill
 
-        let header = NSStackView()
-        header.orientation = .horizontal
-        header.alignment = .centerY
-        header.spacing = 6
-        header.addArrangedSubview(disclosure)
-        header.addArrangedSubview(labelField)
-        let headerSpacer = NSView()
-        headerSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        header.addArrangedSubview(headerSpacer)
-        header.addArrangedSubview(removeButton)
-        addFilling(header, to: section)
+        let promptLabel = NSTextField(labelWithString: "Prompt:")
+        promptLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let body = NSStackView()
-        body.translatesAutoresizingMaskIntoConstraints = false
-        body.orientation = .vertical
-        body.alignment = .leading
-        body.distribution = .fill
-        body.spacing = 10
-        body.isHidden = isCollapsed
-        addFilling(body, to: section)
-        sectionBodies[ObjectIdentifier(disclosure)] = (style.id, body)
-
-        let shortcutField = NSTextField()
-        shortcutField.placeholderString = "cmd+shift+1"
-        shortcutField.stringValue = ShortcutParser.display(key: style.shortcutKey, modifiers: style.shortcutModifiers)
-        addFilling(row(label: "Shortcut", field: shortcutField), to: body)
-
-        let promptView = NSTextView(frame: NSRect(x: 0, y: 0, width: 0, height: 180))
-        promptView.string = (try? PromptLoader(config: config).prompt(for: style)) ?? ""
-        promptView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         promptView.isRichText = false
         promptView.usesFindPanel = true
+        promptView.allowsUndo = true
+        promptView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         promptView.isVerticallyResizable = true
         promptView.isHorizontallyResizable = false
         promptView.autoresizingMask = [.width]
+        promptView.minSize = NSSize(width: 0, height: 0)
         promptView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        promptView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         promptView.textContainer?.widthTracksTextView = true
-        promptView.textContainer?.heightTracksTextView = false
-        promptView.textContainerInset = NSSize(width: 8, height: 8)
-
-        let promptContainer = NSView()
-        promptContainer.translatesAutoresizingMaskIntoConstraints = false
-        promptContainer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        promptContainer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        promptView.textContainerInset = NSSize(width: 6, height: 8)
 
         let promptScroll = NSScrollView()
         promptScroll.translatesAutoresizingMaskIntoConstraints = false
-        promptScroll.hasVerticalScroller = true
-        promptScroll.hasHorizontalScroller = false
-        promptScroll.borderType = .bezelBorder
         promptScroll.documentView = promptView
-        promptContainer.addSubview(promptScroll)
-        NSLayoutConstraint.activate([
-            promptScroll.leadingAnchor.constraint(equalTo: promptContainer.leadingAnchor),
-            promptScroll.trailingAnchor.constraint(equalTo: promptContainer.trailingAnchor),
-            promptScroll.topAnchor.constraint(equalTo: promptContainer.topAnchor),
-            promptScroll.bottomAnchor.constraint(equalTo: promptContainer.bottomAnchor),
-            promptContainer.heightAnchor.constraint(equalToConstant: 180),
-        ])
-        addFilling(promptContainer, to: body)
+        promptScroll.hasVerticalScroller = true
+        promptScroll.borderType = .bezelBorder
 
-        let promptFile = style.promptFile ?? "styles/\(style.id).md"
-        styleEditors.append(StyleEditor(id: style.id, promptFile: promptFile, labelField: labelField, shortcutField: shortcutField, promptView: promptView))
-        styleBoxes[style.id] = box
-        return box
+        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byWordWrapping
+        statusLabel.maximumNumberOfLines = 2
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelPressed))
+        cancelButton.keyEquivalent = "\u{1b}"
+        cancelButton.translatesAutoresizingMaskIntoConstraints = false
+        let saveButton = NSButton(title: "Save", target: self, action: #selector(savePressed))
+        saveButton.keyEquivalent = "\r"
+        saveButton.translatesAutoresizingMaskIntoConstraints = false
+
+        for view in [formGrid, separator, stylesHeader, tableScroll, addRemoveControl, detailGrid, promptLabel, promptScroll, statusLabel, cancelButton, saveButton] {
+            contentView.addSubview(view)
+        }
+
+        let inset: CGFloat = 20
+        NSLayoutConstraint.activate([
+            formGrid.topAnchor.constraint(equalTo: contentView.topAnchor, constant: inset),
+            formGrid.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: inset),
+            formGrid.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -inset),
+            // Fix the field column's leading edge; otherwise the grid dumps slack into the label column.
+            apiKeyField.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 150),
+
+            separator.topAnchor.constraint(equalTo: formGrid.bottomAnchor, constant: 14),
+            separator.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: inset),
+            separator.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -inset),
+
+            stylesHeader.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 12),
+            stylesHeader.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: inset),
+
+            tableScroll.topAnchor.constraint(equalTo: stylesHeader.bottomAnchor, constant: 8),
+            tableScroll.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: inset),
+            tableScroll.widthAnchor.constraint(equalToConstant: 170),
+
+            addRemoveControl.topAnchor.constraint(equalTo: tableScroll.bottomAnchor, constant: 4),
+            addRemoveControl.leadingAnchor.constraint(equalTo: tableScroll.leadingAnchor),
+
+            detailGrid.topAnchor.constraint(equalTo: tableScroll.topAnchor),
+            detailGrid.leadingAnchor.constraint(equalTo: tableScroll.trailingAnchor, constant: 16),
+            detailGrid.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -inset),
+
+            promptLabel.topAnchor.constraint(equalTo: detailGrid.bottomAnchor, constant: 10),
+            promptLabel.leadingAnchor.constraint(equalTo: detailGrid.leadingAnchor),
+
+            promptScroll.topAnchor.constraint(equalTo: promptLabel.bottomAnchor, constant: 4),
+            promptScroll.leadingAnchor.constraint(equalTo: detailGrid.leadingAnchor),
+            promptScroll.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -inset),
+            promptScroll.bottomAnchor.constraint(equalTo: addRemoveControl.bottomAnchor),
+
+            saveButton.topAnchor.constraint(equalTo: addRemoveControl.bottomAnchor, constant: 16),
+            saveButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -inset),
+            saveButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -inset),
+            cancelButton.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -10),
+            cancelButton.firstBaselineAnchor.constraint(equalTo: saveButton.firstBaselineAnchor),
+
+            statusLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: inset),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: cancelButton.leadingAnchor, constant: -12),
+            statusLabel.centerYAnchor.constraint(equalTo: saveButton.centerYAnchor),
+        ])
     }
 
-    @objc private func addStylePressed() {
-        let id = StyleConfig.uniqueID(existing: styleEditors.map(\.id))
-        let style = StyleConfig(id: id, label: "New style", promptFile: "styles/\(id).md", shortcutKey: nil, shortcutModifiers: nil)
-        guard let addStyleRow, let index = stack.arrangedSubviews.firstIndex(of: addStyleRow) else { return }
-        addFilling(styleSection(for: style, config: currentConfig), to: stack, at: index)
-        window?.makeFirstResponder(styleEditors.last?.labelField)
+    private func rebuildStyleDrafts(config: RuntimeConfig) {
+        let loader = PromptLoader(config: config)
+        styleDrafts = config.styles.map { style in
+            StyleDraft(
+                id: style.id,
+                promptFile: style.promptFile ?? "styles/\(style.id).md",
+                label: style.label,
+                shortcut: ShortcutParser.display(key: style.shortcutKey, modifiers: style.shortcutModifiers),
+                prompt: (try? loader.prompt(for: style)) ?? ""
+            )
+        }
+        displayedStyle = nil
+        styleTable.reloadData()
+        if !styleDrafts.isEmpty {
+            styleTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        }
+        syncSelection()
+    }
+
+    // MARK: Style list
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        styleDrafts.count
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let identifier = NSUserInterfaceItemIdentifier("StyleCell")
+        let cell: NSTableCellView
+        if let reused = tableView.makeView(withIdentifier: identifier, owner: nil) as? NSTableCellView {
+            cell = reused
+        } else {
+            cell = NSTableCellView()
+            cell.identifier = identifier
+            let text = NSTextField(labelWithString: "")
+            text.translatesAutoresizingMaskIntoConstraints = false
+            text.lineBreakMode = .byTruncatingTail
+            cell.addSubview(text)
+            cell.textField = text
+            NSLayoutConstraint.activate([
+                text.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 5),
+                text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -5),
+                text.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
+        }
+        cell.textField?.stringValue = styleDrafts[row].label
+        return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        commitDetailFields()
+        syncSelection()
+    }
+
+    // The detail pane edits an in-memory draft; write it back before the selection
+    // moves elsewhere so switching styles never loses edits.
+    private func commitDetailFields() {
+        guard let draft = displayedStyle else { return }
+        draft.label = styleNameField.stringValue
+        draft.shortcut = styleShortcutField.stringValue
+        draft.prompt = promptView.string
+    }
+
+    private func syncSelection() {
+        let row = styleTable.selectedRow
+        displayedStyle = styleDrafts.indices.contains(row) ? styleDrafts[row] : nil
+        styleNameField.isEnabled = displayedStyle != nil
+        styleShortcutField.isEnabled = displayedStyle != nil
+        promptView.isEditable = displayedStyle != nil
+        styleNameField.stringValue = displayedStyle?.label ?? ""
+        styleShortcutField.stringValue = displayedStyle?.shortcut ?? ""
+        promptView.string = displayedStyle?.prompt ?? ""
+    }
+
+    // Keep the sidebar name in sync while the user types.
+    func controlTextDidChange(_ notification: Notification) {
+        guard (notification.object as? NSTextField) === styleNameField,
+              let draft = displayedStyle,
+              let row = styleDrafts.firstIndex(where: { $0 === draft }) else { return }
+        draft.label = styleNameField.stringValue
+        styleTable.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+    }
+
+    @objc private func addRemovePressed(_ sender: NSSegmentedControl) {
+        if sender.selectedSegment == 0 {
+            addStyle()
+        } else {
+            removeSelectedStyle()
+        }
+    }
+
+    private func addStyle() {
+        commitDetailFields()
+        let id = StyleConfig.uniqueID(existing: styleDrafts.map(\.id))
+        styleDrafts.append(StyleDraft(id: id, promptFile: "styles/\(id).md", label: "New Style", shortcut: "", prompt: ""))
+        styleTable.reloadData()
+        styleTable.selectRowIndexes(IndexSet(integer: styleDrafts.count - 1), byExtendingSelection: false)
+        syncSelection()
+        window?.makeFirstResponder(styleNameField)
+        styleNameField.selectText(nil)
     }
 
     // Removal only takes effect on Save, like every other edit in this window.
-    @objc private func removeStylePressed(_ sender: NSButton) {
-        guard let id = sender.identifier?.rawValue else { return }
-        guard styleEditors.count > 1 else {
+    private func removeSelectedStyle() {
+        let row = styleTable.selectedRow
+        guard row >= 0 else { return }
+        guard styleDrafts.count > 1 else {
             statusLabel.stringValue = "Keep at least one style."
             return
         }
-        guard let box = styleBoxes.removeValue(forKey: id) else { return }
-        stack.removeArrangedSubview(box)
-        box.removeFromSuperview()
-        styleEditors.removeAll { $0.id == id }
-        sectionBodies = sectionBodies.filter { $0.value.styleID != id }
-    }
-
-    // NSStackView alignment constraints are created at priority 250, so `.width` does not
-    // reliably stretch arranged subviews; pin each child's width to the stack explicitly.
-    private func addFilling(_ view: NSView, to stackView: NSStackView, at index: Int? = nil) {
-        if let index {
-            stackView.insertArrangedSubview(view, at: index)
-        } else {
-            stackView.addArrangedSubview(view)
+        let removed = styleDrafts.remove(at: row)
+        if displayedStyle === removed {
+            displayedStyle = nil
         }
-        let insets = stackView.edgeInsets
-        view.widthAnchor.constraint(equalTo: stackView.widthAnchor, constant: -(insets.left + insets.right)).isActive = true
+        styleTable.reloadData()
+        styleTable.selectRowIndexes(IndexSet(integer: min(row, styleDrafts.count - 1)), byExtendingSelection: false)
+        syncSelection()
     }
 
-    private func row(label text: String, field: NSControl) -> NSView {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .firstBaseline
-        row.spacing = 10
-        let label = NSTextField(labelWithString: text)
-        label.alignment = .left
-        label.widthAnchor.constraint(equalToConstant: 70).isActive = true
-        field.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        row.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        row.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        row.addArrangedSubview(label)
-        row.addArrangedSubview(field)
-        return row
-    }
-
-    @objc private func styleSectionToggled(_ sender: NSButton) {
-        guard let entry = sectionBodies[ObjectIdentifier(sender)] else { return }
-        let collapsed = sender.state == .off
-        if collapsed {
-            collapsedStyleIDs.insert(entry.styleID)
-        } else {
-            collapsedStyleIDs.remove(entry.styleID)
-        }
-        entry.body.isHidden = collapsed
-    }
+    // MARK: Actions
 
     @objc private func cancelPressed() {
         window?.orderOut(nil)
@@ -1716,6 +1753,7 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func savePressed() {
         do {
+            commitDetailFields()
             let provider = selectedProvider
             let model = modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let endpoint = endpointField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1732,17 +1770,17 @@ final class SettingsWindowController: NSWindowController {
             // can't leave the Keychain updated but the config unsaved.
             var styles: [StyleConfig] = []
             var prompts: [String: String] = [:]
-            for editor in styleEditors {
-                let shortcut = try ShortcutParser.parse(editor.shortcutField.stringValue)
-                let label = editor.labelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            for draft in styleDrafts {
+                let shortcut = try ShortcutParser.parse(draft.shortcut)
+                let label = draft.label.trimmingCharacters(in: .whitespacesAndNewlines)
                 styles.append(StyleConfig(
-                    id: editor.id,
+                    id: draft.id,
                     label: label.isEmpty ? "Style" : label,
-                    promptFile: editor.promptFile,
+                    promptFile: draft.promptFile,
                     shortcutKey: shortcut.key,
                     shortcutModifiers: shortcut.modifiers
                 ))
-                prompts[editor.promptFile] = editor.promptView.string
+                prompts[draft.promptFile] = draft.prompt
             }
             let pickerShortcut = try ShortcutParser.parse(pickerShortcutField.stringValue)
 
