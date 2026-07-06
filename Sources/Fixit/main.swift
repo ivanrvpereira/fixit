@@ -938,7 +938,7 @@ enum InlineDiffBuilder {
 
     static func attributedDiff(original: String, fixed: String, font: NSFont) -> NSAttributedString {
         if original == fixed {
-            return NSAttributedString(string: fixed, attributes: [.font: font])
+            return NSAttributedString(string: fixed, attributes: [.font: font, .foregroundColor: NSColor.labelColor])
         }
 
         let oldTokens = tokenize(original)
@@ -985,7 +985,7 @@ enum InlineDiffBuilder {
 
         let result = NSMutableAttributedString()
         for (token, style) in ops {
-            var attributes: [NSAttributedString.Key: Any] = [.font: font]
+            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
             switch style {
             case .plain:
                 break
@@ -1025,14 +1025,24 @@ enum InlineDiffBuilder {
 }
 
 final class OverlayPanel: NSPanel {
+    private static let showsDiffDefaultsKey = "reviewShowsDiff"
     private let stack = NSStackView()
+    private let contentWidth: CGFloat = 640
     private var fixedTextForCopy = ""
     private var refineField: NSTextField?
     private var streamingView: NSTextView?
+    private var resultTextView: NSTextView?
+    private var resultOriginal = ""
+    private var resultFixed = ""
     var onAccept: (() -> Void)?
     var onDismiss: (() -> Void)?
     var onRefine: ((String) -> Void)?
     var onCancel: (() -> Void)?
+
+    private var showsDiff: Bool {
+        get { UserDefaults.standard.object(forKey: Self.showsDiffDefaultsKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Self.showsDiffDefaultsKey) }
+    }
 
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 680, height: 410), styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -1041,20 +1051,21 @@ final class OverlayPanel: NSPanel {
         isReleasedWhenClosed = false
         collectionBehavior = [.canJoinAllSpaces, .transient]
         stack.orientation = .vertical
+        stack.alignment = .leading
         stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         contentView = stack
     }
 
     func showLoading(title: String = "Fixing selected text…", subtitle: String = "Contacting the model provider") {
         rebuild {
-            label(title, font: .boldSystemFont(ofSize: 16))
+            label(title, font: .systemFont(ofSize: 16, weight: .semibold))
             label(subtitle, font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
 
             let (scrollView, textView) = makeTextPane(height: 180)
             textView.textColor = .secondaryLabelColor
             streamingView = textView
-            stack.addArrangedSubview(scrollView)
+            addRow(scrollView)
 
             let buttons = NSStackView()
             buttons.orientation = .horizontal
@@ -1064,9 +1075,10 @@ final class OverlayPanel: NSPanel {
             spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
             buttons.addArrangedSubview(spacer)
             let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelPressed))
+            cancel.controlSize = .large
             cancel.keyEquivalent = "\u{1b}"
             buttons.addArrangedSubview(cancel)
-            stack.addArrangedSubview(buttons)
+            addRow(buttons)
         }
         showCentered()
     }
@@ -1081,61 +1093,107 @@ final class OverlayPanel: NSPanel {
     func showResult(original: String, fixed: String, acceptTitle: String = "Replace") {
         onCancel = nil
         fixedTextForCopy = fixed
+        resultOriginal = original
+        resultFixed = fixed
         rebuild {
-            label("Review the edit", font: .boldSystemFont(ofSize: 16))
-            let (scrollView, textView) = makeTextPane(height: 245)
-            textView.textStorage?.setAttributedString(InlineDiffBuilder.attributedDiff(original: original, fixed: fixed, font: .systemFont(ofSize: 14)))
-            stack.addArrangedSubview(scrollView)
+            let title = NSTextField(labelWithString: "Review the edit")
+            title.font = .systemFont(ofSize: 16, weight: .semibold)
+
+            let toggle = NSSegmentedControl(labels: ["Diff", "Result"], trackingMode: .selectOne, target: self, action: #selector(diffModeChanged(_:)))
+            toggle.controlSize = .small
+            toggle.selectedSegment = showsDiff ? 0 : 1
+
+            let headerSpacer = NSView()
+            headerSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            let header = NSStackView(views: [title, headerSpacer, toggle])
+            header.orientation = .horizontal
+            header.alignment = .centerY
+            addRow(header)
+
+            let (scrollView, textView) = makeTextPane(height: 250)
+            resultTextView = textView
+            addRow(scrollView)
+            renderResultText()
 
             if original == fixed {
                 label("No changes suggested.", font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
             }
 
-            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 560, height: 28))
+            let field = NSTextField(string: "")
             field.placeholderString = "Custom instruction: e.g. translate to English, rewrite for LinkedIn…"
-            field.font = .systemFont(ofSize: 14)
+            field.controlSize = .large
+            field.font = .systemFont(ofSize: 13)
             field.usesSingleLineMode = true
+            field.setContentHuggingPriority(.defaultLow, for: .horizontal)
             field.target = self
             field.action = #selector(refinePressed)
             refineField = field
 
             let apply = NSButton(title: "Apply", target: self, action: #selector(refinePressed))
             apply.controlSize = .large
+            apply.setContentHuggingPriority(.required, for: .horizontal)
 
-            let refineRow = NSStackView()
+            let refineRow = NSStackView(views: [field, apply])
             refineRow.orientation = .horizontal
             refineRow.alignment = .centerY
             refineRow.spacing = 8
-            refineRow.addArrangedSubview(field)
-            refineRow.addArrangedSubview(apply)
-            stack.addArrangedSubview(refineRow)
+            addRow(refineRow)
 
-            let buttons = NSStackView()
+            let copy = NSButton(title: "Copy", target: self, action: #selector(copyPressed))
+            let spacer = NSView()
+            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            let dismiss = NSButton(title: "Dismiss", target: self, action: #selector(dismissPressed))
+            let accept = NSButton(title: acceptTitle, target: self, action: #selector(acceptPressed))
+            accept.keyEquivalent = "\r"
+            let buttons = NSStackView(views: [copy, spacer, dismiss, accept])
             buttons.orientation = .horizontal
             buttons.alignment = .centerY
             buttons.spacing = 8
-            let spacer = NSView()
-            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            buttons.addArrangedSubview(spacer)
-            let dismiss = NSButton(title: "Dismiss", target: self, action: #selector(dismissPressed))
-            let copy = NSButton(title: "Copy", target: self, action: #selector(copyPressed))
-            let accept = NSButton(title: acceptTitle, target: self, action: #selector(acceptPressed))
-            accept.keyEquivalent = "\r"
-            buttons.addArrangedSubview(dismiss)
-            buttons.addArrangedSubview(copy)
-            buttons.addArrangedSubview(accept)
-            stack.addArrangedSubview(buttons)
+            for button in [copy, dismiss, accept] {
+                button.controlSize = .large
+            }
+            addRow(buttons)
+            stack.setCustomSpacing(16, after: refineRow)
         }
         showCentered()
+    }
+
+    @objc private func diffModeChanged(_ sender: NSSegmentedControl) {
+        showsDiff = sender.selectedSegment == 0
+        renderResultText()
+    }
+
+    private func renderResultText() {
+        guard let textView = resultTextView else { return }
+        let font = NSFont.systemFont(ofSize: 14)
+        let content: NSAttributedString
+        if showsDiff {
+            content = InlineDiffBuilder.attributedDiff(original: resultOriginal, fixed: resultFixed, font: font)
+        } else {
+            content = NSAttributedString(string: resultFixed, attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+        }
+        let styled = NSMutableAttributedString(attributedString: content)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        styled.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: styled.length))
+        textView.textStorage?.setAttributedString(styled)
+        textView.scroll(.zero)
     }
 
     func showError(_ message: String) {
         onCancel = nil
         rebuild {
-            label("Fixit failed", font: .boldSystemFont(ofSize: 16))
+            label("Fixit failed", font: .systemFont(ofSize: 16, weight: .semibold))
             label(message, font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
-            let button = NSButton(title: "Dismiss", target: self, action: #selector(dismissPressed))
-            stack.addArrangedSubview(button)
+            let spacer = NSView()
+            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            let dismiss = NSButton(title: "Dismiss", target: self, action: #selector(dismissPressed))
+            dismiss.controlSize = .large
+            dismiss.keyEquivalent = "\r"
+            let buttons = NSStackView(views: [spacer, dismiss])
+            buttons.orientation = .horizontal
+            buttons.alignment = .centerY
+            addRow(buttons)
         }
         showCentered()
     }
@@ -1192,6 +1250,7 @@ final class OverlayPanel: NSPanel {
     private func rebuild(_ build: () -> Void) {
         refineField = nil
         streamingView = nil
+        resultTextView = nil
         stack.arrangedSubviews.forEach { view in
             stack.removeArrangedSubview(view)
             view.removeFromSuperview()
@@ -1199,15 +1258,29 @@ final class OverlayPanel: NSPanel {
         build()
     }
 
+    // Pins top-level rows to a single content width so the layout stays aligned.
+    private func addRow(_ view: NSView) {
+        stack.addArrangedSubview(view)
+        view.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+    }
+
     private func makeTextPane(height: CGFloat) -> (NSScrollView, NSTextView) {
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: height))
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: height))
         textView.font = .systemFont(ofSize: 14)
         textView.isEditable = false
         textView.isSelectable = true
-        textView.textContainerInset = NSSize(width: 8, height: 8)
-        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: height))
+        textView.textContainerInset = NSSize(width: 12, height: 12)
+        textView.autoresizingMask = [.width]
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: height))
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .textBackgroundColor
+        scrollView.wantsLayer = true
+        scrollView.layer?.cornerRadius = 8
+        scrollView.layer?.masksToBounds = true
+        scrollView.layer?.borderWidth = 1
+        scrollView.layer?.borderColor = NSColor.separatorColor.cgColor
         scrollView.documentView = textView
         scrollView.heightAnchor.constraint(equalToConstant: height).isActive = true
         return (scrollView, textView)
@@ -1219,7 +1292,8 @@ final class OverlayPanel: NSPanel {
         label.textColor = color
         label.lineBreakMode = .byWordWrapping
         label.maximumNumberOfLines = 0
-        stack.addArrangedSubview(label)
+        label.preferredMaxLayoutWidth = contentWidth
+        addRow(label)
     }
 
     private func showCentered() {
