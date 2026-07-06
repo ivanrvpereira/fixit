@@ -23,6 +23,8 @@ fi
 mkdir -p "$MACOS" "$RESOURCES" "$ICONSET"
 cp ".build/release/Fixit" "$MACOS/Fixit"
 cp "Resources/Info.plist" "$CONTENTS/Info.plist"
+cp "$ROOT/Resources/fixit" "$RESOURCES/fixit"
+chmod +x "$RESOURCES/fixit"
 cp "$ICON_SOURCE" "$RESOURCES/FixitLogo.png"
 
 sips -z 16 16 "$ICON_SOURCE" --out "$ICONSET/icon_16x16.png" >/dev/null

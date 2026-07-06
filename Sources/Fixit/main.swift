@@ -615,6 +615,85 @@ struct ShortcutParser {
     }
 }
 
+enum CLICommand: Equatable {
+    case fix(styleID: String?, text: String?)
+    case styles
+    case config
+    case version
+    case help
+}
+
+struct CLIParser {
+    enum ParseError: LocalizedError, Equatable {
+        case message(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .message(let message): message
+            }
+        }
+    }
+
+    static let validSubcommands = ["fix", "styles", "config", "version", "help"]
+
+    static func parse(_ args: [String]) throws -> CLICommand {
+        guard let command = args.first else { return .help }
+        let rest = Array(args.dropFirst())
+        if validSubcommands.contains(command), rest.contains("--help") || rest.contains("-h") {
+            return .help
+        }
+        switch command {
+        case "fix":
+            return try parseFix(rest)
+        case "styles":
+            return .styles
+        case "config":
+            return .config
+        case "version", "--version", "-v":
+            return .version
+        case "help", "--help", "-h":
+            return .help
+        default:
+            throw ParseError.message("Unknown subcommand \"\(command)\". Valid subcommands: \(validSubcommands.joined(separator: ", ")).")
+        }
+    }
+
+    static func parseLegacy(_ args: [String]) throws -> CLICommand {
+        var mapped = ["fix"]
+        mapped.append(contentsOf: args.filter { $0 != "--fix" })
+        return try parse(mapped)
+    }
+
+    private static func parseFix(_ args: [String]) throws -> CLICommand {
+        var styleID: String?
+        var text: String?
+        var index = 0
+        while index < args.count {
+            let arg = args[index]
+            switch arg {
+            case "--style":
+                styleID = try value(after: arg, at: index, in: args)
+                index += 2
+            case "--text":
+                text = try value(after: arg, at: index, in: args)
+                index += 2
+            case "--help", "-h":
+                return .help
+            default:
+                throw ParseError.message("Unknown option \"\(arg)\" for fix. Valid options: --style <id>, --text <text>, --help.")
+            }
+        }
+        return .fix(styleID: styleID, text: text)
+    }
+
+    private static func value(after flag: String, at index: Int, in args: [String]) throws -> String {
+        guard args.indices.contains(index + 1) else {
+            throw ParseError.message("Missing value for \(flag).")
+        }
+        return args[index + 1]
+    }
+}
+
 enum ConfigStore {
     static func save(config: RuntimeConfig, styles: [StyleConfig], pickerKey: String?, pickerModifiers: [String]?, prompts: [String: String], provider: Provider, model: String?, endpoint: String?) throws {
         try FileManager.default.createDirectory(at: config.configDir, withIntermediateDirectories: true)
@@ -2242,6 +2321,112 @@ final class HotKeyManager {
     }
 }
 
+enum CLIInstaller {
+    enum State: Equatable {
+        case installed
+        case stale
+        case notInstalled
+    }
+
+    struct Result {
+        let success: Bool
+        let message: String
+    }
+
+    static let linkPath = "/usr/local/bin/fixit"
+
+    static var targetURL: URL? {
+        Bundle.main.resourceURL?.appendingPathComponent("fixit")
+    }
+
+    static func state() -> State {
+        let manager = FileManager.default
+        if let destination = try? manager.destinationOfSymbolicLink(atPath: linkPath) {
+            guard let targetURL else { return .stale }
+            return resolvedPath(destination, relativeTo: URL(fileURLWithPath: linkPath).deletingLastPathComponent()) == resolvedPath(targetURL.path) ? .installed : .stale
+        }
+        return manager.fileExists(atPath: linkPath) ? .stale : .notInstalled
+    }
+
+    static func install() -> Result {
+        guard let targetURL, FileManager.default.fileExists(atPath: targetURL.path) else {
+            return Result(success: false, message: "The command line tool can only be installed from the built app bundle.")
+        }
+
+        if state() == .installed {
+            return Result(success: true, message: "The command line tool is already installed at \(linkPath).")
+        }
+
+        do {
+            if state() == .stale {
+                try FileManager.default.removeItem(atPath: linkPath)
+            }
+            try FileManager.default.createSymbolicLink(atPath: linkPath, withDestinationPath: targetURL.path)
+            return Result(success: true, message: "Installed \(linkPath). You can now run `fixit` in a terminal.")
+        } catch {
+            let command = "mkdir -p /usr/local/bin && ln -sf \(shellEscaped(targetURL.path)) /usr/local/bin/fixit"
+            return runAdministratorScript(command, successMessage: "Installed \(linkPath). You can now run `fixit` in a terminal.", failurePrefix: "Could not install the command line tool")
+        }
+    }
+
+    static func uninstall() -> Result {
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: linkPath)) != nil else {
+            return Result(success: true, message: "The command line tool is not installed.")
+        }
+
+        do {
+            try FileManager.default.removeItem(atPath: linkPath)
+            return Result(success: true, message: "Removed \(linkPath).")
+        } catch {
+            return runAdministratorScript("rm -f /usr/local/bin/fixit", successMessage: "Removed \(linkPath).", failurePrefix: "Could not uninstall the command line tool")
+        }
+    }
+
+    private static func runAdministratorScript(_ command: String, successMessage: String, failurePrefix: String) -> Result {
+        let script = "do shell script \"\(appleScriptEscaped(command))\" with administrator privileges"
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        process.standardOutput = output
+        process.standardError = output
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                return Result(success: true, message: successMessage)
+            }
+            let detail = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Result(success: false, message: "\(failurePrefix): \(detail?.isEmpty == false ? detail! : "administrator authorization failed").")
+        } catch {
+            return Result(success: false, message: "\(failurePrefix): \(error.localizedDescription)")
+        }
+    }
+
+    private static func resolvedPath(_ path: String, relativeTo baseURL: URL? = nil) -> String {
+        let url: URL
+        if path.hasPrefix("/") {
+            url = URL(fileURLWithPath: path)
+        } else if let baseURL {
+            url = URL(fileURLWithPath: path, relativeTo: baseURL)
+        } else {
+            url = URL(fileURLWithPath: path)
+        }
+        return (url.path as NSString).resolvingSymlinksInPath
+    }
+
+    private static func shellEscaped(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
+    private static func appleScriptEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+}
+
 @MainActor
 final class AppController: NSObject, NSApplicationDelegate {
     private var config: RuntimeConfig!
@@ -2527,6 +2712,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Setup Guide…", action: #selector(openOnboarding), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Install Command Line Tool…", action: #selector(installCommandLineTool), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         item.menu = menu
         statusItem = item
@@ -2544,6 +2730,40 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     @objc private func openOnboarding() {
         showOnboarding()
+    }
+
+    @objc private func installCommandLineTool() {
+        guard let targetURL = CLIInstaller.targetURL,
+              FileManager.default.fileExists(atPath: targetURL.path) else {
+            showAlert(title: "Command Line Tool Unavailable", message: "The CLI can only be installed from the built app bundle.")
+            return
+        }
+
+        switch CLIInstaller.state() {
+        case .installed:
+            let alert = NSAlert()
+            alert.messageText = "Command Line Tool Installed"
+            alert.informativeText = "Fixit is installed at \(CLIInstaller.linkPath)."
+            alert.addButton(withTitle: "Uninstall")
+            alert.addButton(withTitle: "OK")
+            if runAlert(alert) == .alertFirstButtonReturn {
+                showInstallerResult(CLIInstaller.uninstall())
+            }
+        case .stale, .notInstalled:
+            let outsideApplications = !Bundle.main.bundlePath.hasPrefix("/Applications/")
+            let warning = outsideApplications ? "\n\nThis app is not running from /Applications. The link will break if you move the app." : ""
+            let staleWarning = CLIInstaller.state() == .stale ? "\n\nAn existing /usr/local/bin/fixit link or file will be replaced." : ""
+            let alert = NSAlert()
+            alert.messageText = "Install Command Line Tool?"
+            alert.informativeText = "This will install \(CLIInstaller.linkPath) and point it at this app bundle.\(staleWarning)\(warning)"
+            alert.addButton(withTitle: "Install")
+            alert.addButton(withTitle: "Cancel")
+            if runAlert(alert) == .alertFirstButtonReturn {
+                let result = CLIInstaller.install()
+                let message = outsideApplications && result.success ? "\(result.message)\(warning)" : result.message
+                showInstallerResult(CLIInstaller.Result(success: result.success, message: message))
+            }
+        }
     }
 
     private func showOnboarding() {
@@ -2588,12 +2808,51 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func showError(_ message: String) {
         overlay.showError(message)
     }
+
+    private func runAlert(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal()
+    }
+
+    private func showAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        _ = runAlert(alert)
+    }
+
+    private func showInstallerResult(_ result: CLIInstaller.Result) {
+        showAlert(title: result.success ? "Command Line Tool Updated" : "Command Line Tool Failed", message: result.message)
+    }
 }
 
-func runCLI() async throws {
-    let args = CommandLine.arguments
+func runCLI(_ command: CLICommand) async throws {
+    switch command {
+    case .fix(let styleID, let inlineText):
+        try await runCLIFix(styleID: styleID, inlineText: inlineText)
+    case .styles:
+        let config = try RuntimeConfig.load()
+        for style in config.styles {
+            print("\(style.id)\t\(style.label)")
+        }
+    case .config:
+        let config = try RuntimeConfig.load()
+        print("configFile\t\(config.configDir.appendingPathComponent("config.json").path)")
+        print("provider\t\(config.provider.rawValue)")
+        print("model\t\(config.model)")
+        print("endpoint\t\(sanitizedEndpoint(config.baseURL))")
+        print("styles\t\(config.styles.count)")
+    case .version:
+        print(appVersion())
+    case .help:
+        printCLIUsage()
+    }
+}
+
+func runCLIFix(styleID: String?, inlineText: String?) async throws {
     let text: String
-    if let inline = value(after: "--text", in: args) {
+    if let inline = inlineText {
         text = inline
     } else {
         text = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
@@ -2604,7 +2863,7 @@ func runCLI() async throws {
 
     let config = try RuntimeConfig.load()
     let style: StyleConfig
-    if let styleID = value(after: "--style", in: args) {
+    if let styleID {
         guard let match = config.styles.first(where: { $0.id == styleID }) else {
             throw FixitError.configuration("Unknown style \"\(styleID)\". Available styles: \(config.styles.map(\.id).joined(separator: ", ")).")
         }
@@ -2622,27 +2881,67 @@ func printCLIUsage() {
     Fixit — fix typos and polish phrasing in selected text with an LLM.
 
     Usage:
-      Fixit                  Run the menu-bar app.
-      Fixit --fix [options]  Fix text once and print the result.
+      Fixit                         Run the menu-bar app.
+      Fixit cli <command> [options] Run a CLI command.
+      fixit <command> [options]     Run via the installed command line tool.
+      Fixit --fix [options]         Deprecated alias for: Fixit cli fix.
 
-    Options:
+    Commands:
+      fix [--style <id>] [--text <text>]
+          Fix text once and print the result. Reads stdin when --text is omitted.
+      styles
+          Print available styles as: <id><TAB><label>.
+      config
+          Print resolved non-secret configuration settings.
+      version
+          Print the app version.
+      help
+          Show this help.
+
+    Fix options:
       --style <id>   Style id from config.json (default: native).
       --text <text>  Text to fix; reads stdin when omitted.
-      --help, -h     Show this help.
+
+    Global options:
+      --help, -h      Show this help.
+      --version, -v   Show the version.
     """)
 }
 
-func value(after flag: String, in args: [String]) -> String? {
-    guard let index = args.firstIndex(of: flag), args.indices.contains(index + 1) else { return nil }
-    return args[index + 1]
+func appVersion() -> String {
+    guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+          !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return "dev"
+    }
+    return version
 }
 
-if CommandLine.arguments.contains("--help") || CommandLine.arguments.contains("-h") {
+func sanitizedEndpoint(_ url: URL) -> String {
+    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+        return url.absoluteString
+    }
+    components.user = nil
+    components.password = nil
+    components.query = nil
+    components.fragment = nil
+    return components.url?.absoluteString ?? url.absoluteString
+}
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments.first == "cli" {
+    do {
+        try await runCLI(CLIParser.parse(Array(arguments.dropFirst())))
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
+} else if arguments.contains("--help") || arguments.contains("-h") {
     printCLIUsage()
     exit(0)
-} else if CommandLine.arguments.contains("--fix") {
+} else if arguments.contains("--fix") {
     do {
-        try await runCLI()
+        try await runCLI(CLIParser.parseLegacy(arguments))
         exit(0)
     } catch {
         FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))

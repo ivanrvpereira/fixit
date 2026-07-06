@@ -91,11 +91,22 @@ If no Fixit config exists yet, Fixit falls back to an old `~/.config/word-fixer`
 
 ## CLI
 
-Fixit also runs from the terminal, handy for scripting or trying a prompt without touching your selection:
+Fixit also runs from the terminal, handy for scripting or trying a prompt without touching your selection. From the menu-bar app, choose **Install Command Line Tool…** to install `/usr/local/bin/fixit`.
 
 ```sh
-swift run Fixit --fix --style native --text "lets create a new project on this folder"
+fixit fix --style native --text "lets create a new project on this folder"
 ```
+
+Available commands:
+
+```sh
+fixit fix [--style native] [--text "text to fix"]  # reads stdin when --text is omitted
+fixit styles                                      # prints: <id><tab><label>
+fixit config                                      # prints non-secret resolved settings
+fixit version
+```
+
+When running from source, use `swift run Fixit cli ...`, for example `swift run Fixit cli styles`. The old `swift run Fixit --fix ...` form still works as a deprecated alias for `swift run Fixit cli fix ...`.
 
 ## Requirements
 

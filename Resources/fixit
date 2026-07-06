@@ -1,0 +1,3 @@
+#!/bin/sh
+# CLI entry installed by the Fixit app; the public symlink points here.
+exec "$(dirname "$(readlink -f "$0")")/../MacOS/Fixit" cli "$@"
