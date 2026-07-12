@@ -5,6 +5,7 @@
 
   ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-brightgreen)
   ![Swift](https://img.shields.io/badge/Swift-6.0-orange)
+  ![License](https://img.shields.io/badge/license-MIT-blue)
 </div>
 
 ---
@@ -36,9 +37,8 @@
 
 There are no prebuilt releases yet — building from source takes about two minutes:
 
-<!-- TODO: update the clone URL once the repo is published -->
 ```sh
-git clone https://github.com/<you>/fixit.git
+git clone https://github.com/ivanrvpereira/fixit.git
 cd fixit
 ./scripts/create-signing-cert.sh   # one-time: create a local signing identity
 make trust-signing                 # one-time: allow codesign to use it without prompts
@@ -117,3 +117,7 @@ When running from source, use `swift run Fixit cli ...`, for example `swift run 
 ## Acknowledgements
 
 Fixit is inspired by [Word Fixer](https://github.com/HazAT/word-fixer-app) by HazAT.
+
+## License
+
+[MIT](LICENSE)
