@@ -4,6 +4,7 @@ dist/
 .claude/
 docs/plans/
 .superpowers/
+website-options/
 .env
 .DS_Store
 *.xcuserstate

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Fixit logo, playful sticker edition: text lines + pencil + squiggle -->
+  <rect x="36" y="36" width="440" height="440" rx="106" fill="#4A7CF7" stroke="#17151F" stroke-width="22"/>
+
+  <!-- text lines -->
+  <rect x="104" y="128" width="230" height="36" rx="18" fill="#FFFDF7" stroke="#17151F" stroke-width="11"/>
+  <rect x="104" y="204" width="150" height="36" rx="18" fill="#FFFDF7" stroke="#17151F" stroke-width="11"/>
+  <rect x="104" y="396" width="200" height="36" rx="18" fill="#FFFDF7" stroke="#17151F" stroke-width="11"/>
+
+  <!-- squiggle being drawn -->
+  <path d="M104 318 q 17 -27 34 0 t 34 0 t 34 0 t 34 0"
+        fill="none" stroke="#17151F" stroke-width="42" stroke-linecap="round"/>
+  <path d="M104 318 q 17 -27 34 0 t 34 0 t 34 0 t 34 0"
+        fill="none" stroke="#FFD23F" stroke-width="20" stroke-linecap="round"/>
+
+  <!-- pencil, drawing the squiggle -->
+  <g transform="rotate(45 350 290)">
+    <!-- body -->
+    <rect x="325" y="128" width="52" height="180" rx="12" fill="#FFD23F" stroke="#17151F" stroke-width="11"/>
+    <!-- eraser -->
+    <rect x="325" y="112" width="52" height="44" rx="12" fill="#FF6B57" stroke="#17151F" stroke-width="11"/>
+    <!-- wood tip -->
+    <path d="M325 308 h52 l-26 52 z" fill="#FFFDF7" stroke="#17151F" stroke-width="11" stroke-linejoin="round"/>
+    <!-- graphite -->
+    <path d="M341 340 h20 l-10 20 z" fill="#17151F"/>
+  </g>
+</svg>
