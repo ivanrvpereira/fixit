@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="Resources/FixitLogo.png" alt="Fixit logo" width="128" height="128">
   <h1>Fixit</h1>
   <p><strong>Fix typos and polish phrasing in any macOS app with one hotkey.</strong></p>
   <p>Select text anywhere, press a shortcut, and Fixit rewrites it in place using any model on OpenRouter.</p>
@@ -35,9 +36,10 @@
 
 ## Install
 
-There are no prebuilt releases yet — building from source takes about two minutes:
+There are no prebuilt releases yet, so you need to build from source. The build itself takes about two minutes; if you don't have the Xcode Command Line Tools yet, installing them first is a large one-time download:
 
 ```sh
+xcode-select --install             # one-time: install the Xcode Command Line Tools (skip if already installed)
 git clone https://github.com/ivanrvpereira/fixit.git
 cd fixit
 ./scripts/create-signing-cert.sh   # one-time: create a local signing identity
@@ -110,7 +112,8 @@ When running from source, use `swift run Fixit cli ...`, for example `swift run 
 
 ## Requirements
 
-- macOS 13 or later
+- macOS 13 or later to run
+- macOS 14.5 or later with the Xcode 16 Command Line Tools (Swift 6 toolchain) to build
 - An [OpenRouter](https://openrouter.ai) API key
 - Accessibility permission (to read the selection and paste the result)
 
