@@ -20,7 +20,7 @@
 ## Features
 
 - ⚡ **Works everywhere** — system-wide hotkeys fix selected text in any app: Slack, Mail, your browser, your editor. Nothing selected? Fixit falls back to your clipboard.
-- ✍️ **Three built-in styles** — sound native (`⌘⇧1`), rewrite aggressively (`⌘⇧2`), or correct minimally (`⌘⇧3`), plus a style picker on `⌘⇧0`.
+- ✍️ **Three built-in styles** — sound native (`⌘⇧1`), proofread (`⌘⇧2`), or make professional (`⌘⇧3`), plus a style picker on `⌘⇧0`.
 - 🎛️ **Fully customizable** — every style is just a Markdown prompt and a shortcut. Edit, rename, add, or remove styles right in Settings.
 - 📡 **Streaming with cancel** — watch the fix arrive token by token; press Esc to cancel mid-flight.
 - 🤖 **Bring your own model** — talks directly to [OpenRouter](https://openrouter.ai), so you can use any model and pay only for what you use. No subscription, no middleman server.
