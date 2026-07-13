@@ -44,7 +44,8 @@ else
   rm -rf "$ICONSET"
 fi
 
-if ! security find-identity -v -p codesigning | grep -Fq "\"$CODE_SIGN_IDENTITY\""; then
+# CODE_SIGN_IDENTITY=- means ad-hoc signing (used by CI; the Homebrew cask re-signs locally).
+if [[ "$CODE_SIGN_IDENTITY" != "-" ]] && ! security find-identity -v -p codesigning | grep -Fq "\"$CODE_SIGN_IDENTITY\""; then
   printf 'Missing code signing identity: %s\n' "$CODE_SIGN_IDENTITY" >&2
   printf 'Run ./scripts/create-signing-cert.sh to create it, or set\n' >&2
   printf 'CODE_SIGN_IDENTITY to an existing local code signing identity.\n' >&2

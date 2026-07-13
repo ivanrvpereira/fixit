@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Resources/Info.plist
+
+      - name: Build app (ad-hoc signed; the cask re-signs locally)
+        run: CODE_SIGN_IDENTITY=- ./scripts/build-app.sh
+
+      - name: Package
+        run: |
+          STAGE="$(mktemp -d)"
+          cp -R dist/Fixit.app "$STAGE/"
+          cp scripts/create-signing-cert.sh "$STAGE/"
+          COPYFILE_DISABLE=1 ditto -c -k "$STAGE" "Fixit-$VERSION.zip"
+          echo "SHA256=$(shasum -a 256 "Fixit-$VERSION.zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Render Homebrew cask
+        run: |
+          sed -e "s/{{VERSION}}/$VERSION/" -e "s/{{SHA256}}/$SHA256/" \
+            packaging/homebrew/fixit.rb > fixit.rb
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "Fixit-$VERSION.zip" fixit.rb \
+            --title "Fixit $VERSION" --generate-notes
