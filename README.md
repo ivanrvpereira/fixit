@@ -23,7 +23,7 @@
 - ✍️ **Three built-in styles** — sound native (`⌘⇧1`), proofread (`⌘⇧2`), or make professional (`⌘⇧3`), plus a style picker on `⌘⇧0`.
 - 🎛️ **Fully customizable** — every style is just a Markdown prompt and a shortcut. Edit, rename, add, or remove styles right in Settings.
 - 📡 **Streaming with cancel** — watch the fix arrive token by token; press Esc to cancel mid-flight.
-- 🤖 **Bring your own model** — pick a provider: [OpenRouter](https://openrouter.ai), OpenAI, Groq, Gemini, Mistral, Cerebras, local [Ollama](https://ollama.com), or any OpenAI-compatible endpoint. No subscription, no middleman server. Free tiers cover casual use, and local Ollama needs no account at all.
+- 🤖 **Bring your own model** — pick a provider: [OpenRouter](https://openrouter.ai), [OpenAI](https://platform.openai.com), [Groq](https://console.groq.com), [Gemini](https://aistudio.google.com), [Mistral](https://console.mistral.ai), [Cerebras](https://cloud.cerebras.ai), local [Ollama](https://ollama.com), or any OpenAI-compatible endpoint. No subscription, no middleman server. Free tiers cover casual use, and local Ollama needs no account at all.
 - 🔐 **Keys stay in your Keychain** — the API key and model are stored in the macOS login Keychain, not in plain-text config.
 - 👻 **Lightweight** — a small menu-bar app with no Dock icon, plus a CLI mode for scripting and testing.
 
@@ -91,7 +91,7 @@ Fixit rewrites short selections, so small, fast models ("mini", "flash", "small"
 | [Gemini](https://aistudio.google.com) | `gemini-2.0-flash` | ~1,500 req/day |
 | [Mistral](https://console.mistral.ai) | `mistral-small-latest` | free "Experiment" tier (~1B tokens/month) |
 | [Cerebras](https://cloud.cerebras.ai) | `llama-3.3-70b` | ~1M tokens/day |
-| OpenAI | `gpt-4.1-mini` | paid only |
+| [OpenAI](https://platform.openai.com) | `gpt-4.1-mini` | paid only |
 | [Ollama](https://ollama.com) | `llama3.2` | fully local, no account or key |
 
 No key yet? Grab a free **Groq** key — the most generous free tier and the fastest responses, which is the whole experience in a select-and-fix tool:
