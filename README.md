@@ -36,7 +36,18 @@
 
 ## Install
 
-There are no prebuilt releases yet, so you need to build from source. The build itself takes about two minutes; if you don't have the Xcode Command Line Tools yet, installing them first is a large one-time download:
+```sh
+brew install --cask ivanrvpereira/tap/fixit
+```
+
+The first install asks for your login keychain password once: the release binary is re-signed with a local identity so macOS keeps your Accessibility permission across upgrades.
+
+To upgrade later: `brew upgrade --cask fixit`.
+
+<details>
+<summary>Build from source instead</summary>
+
+The build itself takes about two minutes; if you don't have the Xcode Command Line Tools yet, installing them first is a large one-time download:
 
 ```sh
 xcode-select --install             # one-time: install the Xcode Command Line Tools (skip if already installed)
@@ -54,6 +65,8 @@ CODE_SIGN_IDENTITY="Developer ID Application: Your Name (...)" make deploy
 ```
 
 See [BUILDING.md](BUILDING.md) for details, troubleshooting, and manual steps.
+
+</details>
 
 ### First run
 
