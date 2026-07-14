@@ -969,19 +969,17 @@ one "arr".</code></pre>
   <!-- ============ INSTALL ============ -->
   <section aria-labelledby="install-title">
     <div class="wrap">
-      <h2 class="section-title" id="install-title">Install in three lines</h2>
-      <p class="section-sub">Open source, Swift 6, macOS 13+. Clone it, trust it, deploy it.</p>
+      <h2 class="section-title" id="install-title">Install in one line</h2>
+      <p class="section-sub">Open source, Swift 6, macOS 13+. One brew command and you're set.</p>
       <div class="terminal">
         <div class="titlebar">
           <span class="lights" aria-hidden="true"><span class="r"></span><span class="y"></span><span class="g"></span></span>
           Terminal — fixit
           <button class="copy-btn" id="copy-btn" type="button">Copy</button>
         </div>
-        <pre><code><span class="prompt">$</span> git clone https://github.com/ivanrvpereira/fixit
-<span class="prompt">$</span> make trust-signing
-<span class="prompt">$</span> make deploy
-<span class="cmt"># bonus: it's a CLI too</span>
-<span class="prompt">$</span> swift run Fixit --fix --style native \
+        <pre><code><span class="prompt">$</span> brew install --cask ivanrvpereira/tap/fixit
+<span class="cmt"># bonus: it's a CLI too (menu bar → Install Command Line Tool…)</span>
+<span class="prompt">$</span> fixit fix --style native \
     --text "lets create a new project on this folder"</code></pre>
       </div>
 
@@ -1151,7 +1149,7 @@ one "arr".</code></pre>
 
   /* ---------- Terminal copy button (donor) ---------- */
   var copyBtn = document.getElementById("copy-btn");
-  var cmds = "git clone https://github.com/ivanrvpereira/fixit\ncd fixit\nmake trust-signing\nmake deploy";
+  var cmds = "brew install --cask ivanrvpereira/tap/fixit";
   copyBtn.addEventListener("click", function () {
     if (navigator.clipboard) {
       navigator.clipboard.writeText(cmds).then(function () {
