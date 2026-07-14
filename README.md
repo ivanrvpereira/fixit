@@ -80,6 +80,27 @@ That's it — select some text and press `⌘⇧1`.
 
 The Settings window covers the basics: API key, model, and each style's shortcut and prompt.
 
+### Which model?
+
+Fixit rewrites short selections, so small, fast models ("mini", "flash", "small") are ideal — bigger models add latency, not better proofreading. Each provider comes with a sensible default, so you can leave the model field alone:
+
+| Provider | Default model | Free tier |
+|---|---|---|
+| [Groq](https://console.groq.com) | `llama-3.3-70b-versatile` | ~14,400 req/day, no card needed |
+| [OpenRouter](https://openrouter.ai) | `openai/gpt-4.1-mini` | `meta-llama/llama-3.3-70b-instruct:free` (~50–200 req/day) |
+| [Gemini](https://aistudio.google.com) | `gemini-2.0-flash` | ~1,500 req/day |
+| [Mistral](https://console.mistral.ai) | `mistral-small-latest` | free "Experiment" tier (~1B tokens/month) |
+| [Cerebras](https://cloud.cerebras.ai) | `llama-3.3-70b` | ~1M tokens/day |
+| OpenAI | `gpt-4.1-mini` | paid only |
+| [Ollama](https://ollama.com) | `llama3.2` | fully local, no account or key |
+
+No key yet? Grab a free **Groq** key — the most generous free tier and the fastest responses, which is the whole experience in a select-and-fix tool:
+
+- **Fastest:** `llama-3.3-70b-versatile` (the default) — Groq's LPU hardware streams hundreds of tokens per second, so fixes feel instant.
+- **Most powerful on the free tier:** `openai/gpt-oss-120b` — OpenAI's open-weight 120B model, still fast on Groq and free.
+
+_Free-tier limits last checked: July 2026._
+
 For more control, Fixit reads `~/.config/fixit/config.json` — see [`config/config.example.json`](config/config.example.json) for the full shape. Styles are plain Markdown prompt files, so adding a style is: write a prompt, add an entry with a shortcut, done.
 
 <details>
