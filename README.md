@@ -2,7 +2,7 @@
   <img src="Resources/FixitLogo.png" alt="Fixit logo" width="128" height="128">
   <h1>Fixit</h1>
   <p><strong>Fix typos and polish phrasing in any macOS app with one hotkey.</strong></p>
-  <p>Select text anywhere, press a shortcut, and Fixit rewrites it in place using any model on OpenRouter.</p>
+  <p>Select text anywhere, press a shortcut, and Fixit rewrites it in place using OpenRouter, Groq, Gemini, Mistral, or a free local model via Ollama.</p>
 
   ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-brightgreen)
   ![Swift](https://img.shields.io/badge/Swift-6.0-orange)
@@ -23,7 +23,7 @@
 - ✍️ **Three built-in styles** — sound native (`⌘⇧1`), proofread (`⌘⇧2`), or make professional (`⌘⇧3`), plus a style picker on `⌘⇧0`.
 - 🎛️ **Fully customizable** — every style is just a Markdown prompt and a shortcut. Edit, rename, add, or remove styles right in Settings.
 - 📡 **Streaming with cancel** — watch the fix arrive token by token; press Esc to cancel mid-flight.
-- 🤖 **Bring your own model** — talks directly to [OpenRouter](https://openrouter.ai), so you can use any model and pay only for what you use. No subscription, no middleman server.
+- 🤖 **Bring your own model** — pick a provider: [OpenRouter](https://openrouter.ai), OpenAI, Groq, Gemini, Mistral, Cerebras, local [Ollama](https://ollama.com), or any OpenAI-compatible endpoint. No subscription, no middleman server. Free tiers cover casual use, and local Ollama needs no account at all.
 - 🔐 **Keys stay in your Keychain** — the API key and model are stored in the macOS login Keychain, not in plain-text config.
 - 👻 **Lightweight** — a small menu-bar app with no Dock icon, plus a CLI mode for scripting and testing.
 
@@ -72,7 +72,7 @@ See [BUILDING.md](BUILDING.md) for details, troubleshooting, and manual steps.
 
 ### First run
 
-On first launch Fixit opens a short setup guide: grant the **Accessibility** permission (used only to copy your selection and paste the result), pick a provider, paste your API key (e.g. an [OpenRouter key](https://openrouter.ai/keys)), and test a sample fix. You can rerun it anytime from **Setup Guide…** in the menu bar, and tweak everything else (styles, shortcuts, launch at login) in **Settings…**.
+On first launch Fixit opens a short setup guide: grant the **Accessibility** permission (used only to copy your selection and paste the result), pick a provider, paste your API key (e.g. an [OpenRouter key](https://openrouter.ai/keys); Groq and Gemini have free tiers, and local Ollama needs no key), and test a sample fix. You can rerun it anytime from **Setup Guide…** in the menu bar, and tweak everything else (styles, shortcuts, launch at login) in **Settings…**.
 
 That's it — select some text and press `⌘⇧1`.
 
@@ -129,7 +129,7 @@ When running from source, use `swift run Fixit cli ...`, for example `swift run 
 
 - macOS 13 or later to run
 - macOS 14.5 or later with the Xcode 16 Command Line Tools (Swift 6 toolchain) to build
-- An [OpenRouter](https://openrouter.ai) API key
+- An API key for a supported provider (OpenRouter, OpenAI, Groq, Gemini, Mistral, Cerebras), or a local [Ollama](https://ollama.com) install
 - Accessibility permission (to read the selection and paste the result)
 
 ## Acknowledgements
