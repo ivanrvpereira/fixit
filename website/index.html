@@ -8,18 +8,40 @@
 <link rel="apple-touch-icon" href="assets/fixit-logo.png">
 <link rel="canonical" href="https://fixitapp.dev/">
 <meta name="description" content="Fixit is a macOS menu-bar app that fixes typos and polishes phrasing in any app. Select text, press ⌘⇧1, review the edit, done.">
+<meta name="theme-color" content="#FFF6E9">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="Fixit">
+<meta property="og:locale" content="en_US">
 <meta property="og:title" content="Fixit: fix typos anywhere on your Mac with one hotkey">
 <meta property="og:description" content="Fixit is a macOS menu-bar app that fixes typos and polishes phrasing in any app. Select text, press ⌘⇧1, review the edit, done.">
 <meta property="og:url" content="https://fixitapp.dev/">
-<meta property="og:image" content="https://fixitapp.dev/assets/fixit-logo.png">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://fixitapp.dev/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Fixit logo with the tagline: fix typos anywhere on your Mac with one hotkey (⌘⇧1)">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Fixit: fix typos anywhere on your Mac with one hotkey">
 <meta name="twitter:description" content="Fixit is a macOS menu-bar app that fixes typos and polishes phrasing in any app. Select text, press ⌘⇧1, review the edit, done.">
-<meta name="twitter:image" content="https://fixitapp.dev/assets/fixit-logo.png">
+<meta name="twitter:image" content="https://fixitapp.dev/assets/og-image.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Fixit",
+  "description": "Fixit is a macOS menu-bar app that fixes typos and polishes phrasing in any app. Select text, press ⌘⇧1, review the edit, done.",
+  "url": "https://fixitapp.dev/",
+  "image": "https://fixitapp.dev/assets/og-image.png",
+  "applicationCategory": "UtilitiesApplication",
+  "operatingSystem": "macOS 13.0 or later",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "downloadUrl": "https://github.com/ivanrvpereira/fixit",
+  "license": "https://github.com/ivanrvpereira/fixit/blob/main/LICENSE"
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@500;700;800;900&family=Nunito+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@500;700;800;900&family=Nunito+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@500;700;800;900&family=Nunito+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet"></noscript>
 <style>
   :root {
     --cream: #FFF6E9;
@@ -783,7 +805,7 @@
 
 <header class="site">
   <div class="wrap">
-    <a class="logo" href="#">
+    <a class="logo" href="/">
       <img class="logo-badge" src="assets/fixit-logo.svg" alt="" width="40" height="40">
       Fixit
     </a>
@@ -808,7 +830,7 @@
       </div>
 
       <h1 id="hero-title">Write like a native. In every app.</h1>
-      <p class="sub">Select text anywhere on your Mac, press a hotkey, and Fixit rewrites it in place, using any AI model on OpenRouter.</p>
+      <p class="sub">Select text anywhere on your Mac, press a hotkey, and Fixit fixes the typos and polishes the phrasing in place, using any AI model on OpenRouter.</p>
 
       <div class="hero-chips">
         <span class="hero-chip"><span class="dot" aria-hidden="true"></span>Open source</span>
