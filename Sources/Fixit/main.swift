@@ -24,8 +24,8 @@ struct StyleConfig: Codable {
 }
 
 enum Provider: String, CaseIterable {
-    case openRouter = "openrouter"
     case groq = "groq"
+    case openRouter = "openrouter"
     case cerebras = "cerebras"
     case gemini = "gemini"
     case openAI = "openai"
@@ -67,7 +67,7 @@ enum Provider: String, CaseIterable {
     var defaultModel: String {
         switch self {
         case .openRouter: "openai/gpt-4.1-mini"
-        case .groq: "llama-3.3-70b-versatile"
+        case .groq: "openai/gpt-oss-120b"
         case .cerebras: "llama-3.3-70b"
         case .gemini: "gemini-2.0-flash"
         case .openAI: "gpt-4.1-mini"
@@ -95,6 +95,38 @@ enum Provider: String, CaseIterable {
         case .ollama, .custom: false
         default: true
         }
+    }
+
+    /// One-line hint shown under the API key field in Settings and the setup guide.
+    var helpText: String {
+        switch self {
+        case .groq: "Generous free tier (~14,400 requests/day), no card needed, fastest responses."
+        case .openRouter: "One key for hundreds of models, pay-as-you-go."
+        case .cerebras: "Free tier (~1M tokens/day), no card needed."
+        case .gemini: "Free tier (~1,500 requests/day)."
+        case .openAI: "Paid account required."
+        case .mistral: "Free \"Experiment\" tier available."
+        case .ollama: "Runs models locally — no account or key needed."
+        case .custom: "Any OpenAI-compatible chat-completions endpoint."
+        }
+    }
+
+    /// Where to sign up for a key (or download, for Ollama); nil when there is nothing to link to.
+    var signupURL: String? {
+        switch self {
+        case .groq: "https://console.groq.com/keys"
+        case .openRouter: "https://openrouter.ai/keys"
+        case .cerebras: "https://cloud.cerebras.ai"
+        case .gemini: "https://aistudio.google.com/apikey"
+        case .openAI: "https://platform.openai.com/api-keys"
+        case .mistral: "https://console.mistral.ai/api-keys"
+        case .ollama: "https://ollama.com/download"
+        case .custom: nil
+        }
+    }
+
+    var signupLinkTitle: String {
+        self == .ollama ? "Download Ollama" : "Get a key"
     }
 
     var keychainAccount: String {
@@ -187,7 +219,7 @@ struct RuntimeConfig {
             }
             provider = parsed
         } else {
-            provider = .openRouter
+            provider = .groq
         }
 
         let endpointOverride = env["FIXIT_ENDPOINT"] ?? config.endpoint
@@ -242,7 +274,7 @@ struct RuntimeConfig {
 
     /// Last-resort defaults so the menu bar and Settings stay reachable when config.json cannot be loaded.
     static func fallback() -> RuntimeConfig {
-        let provider = Provider.openRouter
+        let provider = Provider.groq
         return RuntimeConfig(
             configDir: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/fixit"),
             debugLogging: false,
@@ -1492,6 +1524,29 @@ final class StylePickerPanel: NSPanel {
     }
 }
 
+/// Blue clickable link that opens a URL and shows the pointing-hand cursor on hover.
+@MainActor
+final class LinkLabel: NSTextField {
+    var url: URL?
+
+    static func make() -> LinkLabel {
+        let label = LinkLabel(labelWithString: "")
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .linkColor
+        return label
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if let url {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
 @MainActor
 final class SettingsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
     /// In-memory draft of one style. Edits only persist on Save, like everything else in this window.
@@ -1513,6 +1568,9 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
     private let providerPopup = NSPopUpButton()
     private let apiKeyField = NSSecureTextField()
+    private let providerHelpLabel = NSTextField(labelWithString: "")
+    private let providerLinkLabel = LinkLabel.make()
+    private let providerHelpRow = NSStackView()
     private let modelField = NSTextField()
     private let endpointField = NSTextField()
     private let pickerShortcutField = NSTextField()
@@ -1568,7 +1626,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
     private var selectedProvider: Provider {
         let index = providerPopup.indexOfSelectedItem
-        return Provider.allCases.indices.contains(index) ? Provider.allCases[index] : .openRouter
+        return Provider.allCases.indices.contains(index) ? Provider.allCases[index] : .groq
     }
 
     @objc private func providerChanged() {
@@ -1580,6 +1638,15 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         apiKeyField.stringValue = (try? KeychainStore.apiKey(provider: provider)) ?? ""
         apiKeyField.placeholderString = provider == .ollama ? "No API key required" : "\(provider.label) API key"
         apiKeyField.isEnabled = provider != .ollama
+        providerHelpLabel.stringValue = provider.helpText
+        if let signupURL = provider.signupURL, let url = URL(string: signupURL) {
+            providerLinkLabel.stringValue = provider.signupLinkTitle
+            providerLinkLabel.url = url
+            providerLinkLabel.isHidden = false
+        } else {
+            providerLinkLabel.isHidden = true
+        }
+        window?.invalidateCursorRects(for: providerLinkLabel)
         modelField.stringValue = isActive ? currentConfig.model : provider.defaultModel
         modelField.placeholderString = provider.defaultModel.isEmpty ? "model id" : provider.defaultModel
         endpointField.isEditable = provider == .custom
@@ -1638,9 +1705,18 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
 
+        providerHelpLabel.font = .systemFont(ofSize: 11)
+        providerHelpLabel.textColor = .secondaryLabelColor
+        providerHelpLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        providerHelpRow.orientation = .horizontal
+        providerHelpRow.spacing = 4
+        providerHelpRow.addArrangedSubview(providerHelpLabel)
+        providerHelpRow.addArrangedSubview(providerLinkLabel)
+
         let formGrid = NSGridView(views: [
             [formLabel("Provider:"), providerPopup],
             [formLabel("API Key:"), apiKeyField],
+            [NSGridCell.emptyContentView, providerHelpRow],
             [formLabel("Model:"), modelField],
             [formLabel("Endpoint:"), endpointField],
             [formLabel("Picker Shortcut:"), pickerShortcutField],
@@ -1994,6 +2070,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     private let providers = Provider.allCases.filter { $0 != .custom }
     private let providerPopup = NSPopUpButton()
     private let apiKeyField = NSSecureTextField()
+    private let providerHelpLabel = NSTextField(labelWithString: "")
+    private let providerLinkLabel = LinkLabel.make()
     private let permissionLabel = NSTextField(labelWithString: "Checking…")
     private let sampleField = NSTextField(string: "lets create a new project on this folder")
     private let testResultLabel = NSTextField(labelWithString: "")
@@ -2004,7 +2082,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     init(config: RuntimeConfig) {
         self.config = config
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 450),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -2084,6 +2162,14 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         stack.addArrangedSubview(providerPopup)
         apiKeyField.widthAnchor.constraint(equalToConstant: 420).isActive = true
         stack.addArrangedSubview(apiKeyField)
+        providerHelpLabel.font = .systemFont(ofSize: 11)
+        providerHelpLabel.textColor = .secondaryLabelColor
+        let providerHelpRow = NSStackView()
+        providerHelpRow.orientation = .horizontal
+        providerHelpRow.spacing = 4
+        providerHelpRow.addArrangedSubview(providerHelpLabel)
+        providerHelpRow.addArrangedSubview(providerLinkLabel)
+        stack.addArrangedSubview(providerHelpRow)
         providerChanged()
 
         addLabel("3. Try it", font: .boldSystemFont(ofSize: 13), to: stack)
@@ -2114,7 +2200,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
     private var selectedProvider: Provider {
         let index = providerPopup.indexOfSelectedItem
-        return providers.indices.contains(index) ? providers[index] : .openRouter
+        return providers.indices.contains(index) ? providers[index] : .groq
     }
 
     @objc private func providerChanged() {
@@ -2122,6 +2208,15 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         apiKeyField.stringValue = (try? KeychainStore.apiKey(provider: provider)) ?? ""
         apiKeyField.placeholderString = provider == .ollama ? "No API key required" : "\(provider.label) API key"
         apiKeyField.isEnabled = provider != .ollama
+        providerHelpLabel.stringValue = provider.helpText
+        if let signupURL = provider.signupURL, let url = URL(string: signupURL) {
+            providerLinkLabel.stringValue = provider.signupLinkTitle
+            providerLinkLabel.url = url
+            providerLinkLabel.isHidden = false
+        } else {
+            providerLinkLabel.isHidden = true
+        }
+        window?.invalidateCursorRects(for: providerLinkLabel)
     }
 
     @objc private func openAccessibilityPressed() {
@@ -2721,7 +2816,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
-        menu.addItem(NSMenuItem(title: "Setup Guide…", action: #selector(openOnboarding), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Check Setup…", action: #selector(openOnboarding), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Install Command Line Tool…", action: #selector(installCommandLineTool), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         item.menu = menu

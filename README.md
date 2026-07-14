@@ -72,7 +72,7 @@ See [BUILDING.md](BUILDING.md) for details, troubleshooting, and manual steps.
 
 ### First run
 
-On first launch Fixit opens a short setup guide: grant the **Accessibility** permission (used only to copy your selection and paste the result), pick a provider, paste your API key (e.g. an [OpenRouter key](https://openrouter.ai/keys); Groq and Gemini have free tiers, and local Ollama needs no key), and test a sample fix. You can rerun it anytime from **Setup Guide…** in the menu bar, and tweak everything else (styles, shortcuts, launch at login) in **Settings…**.
+On first launch Fixit opens a short setup guide: grant the **Accessibility** permission (used only to copy your selection and paste the result), pick a provider, paste your API key (the default is Groq — [grab a free key](https://console.groq.com/keys), no card needed; local Ollama needs no key at all), and test a sample fix. You can rerun it anytime from **Check Setup…** in the menu bar, and tweak everything else (styles, shortcuts, launch at login) in **Settings…**.
 
 That's it — select some text and press `⌘⇧1`.
 
@@ -86,7 +86,7 @@ Fixit rewrites short selections, so small, fast models ("mini", "flash", "small"
 
 | Provider | Default model | Free tier |
 |---|---|---|
-| [Groq](https://console.groq.com) | `llama-3.3-70b-versatile` | ~14,400 req/day, no card needed |
+| [Groq](https://console.groq.com) | `openai/gpt-oss-120b` | ~14,400 req/day, no card needed |
 | [OpenRouter](https://openrouter.ai) | `openai/gpt-4.1-mini` | `meta-llama/llama-3.3-70b-instruct:free` (~50–200 req/day) |
 | [Gemini](https://aistudio.google.com) | `gemini-2.0-flash` | ~1,500 req/day |
 | [Mistral](https://console.mistral.ai) | `mistral-small-latest` | free "Experiment" tier (~1B tokens/month) |
@@ -96,8 +96,8 @@ Fixit rewrites short selections, so small, fast models ("mini", "flash", "small"
 
 No key yet? Grab a free **Groq** key — the most generous free tier and the fastest responses, which is the whole experience in a select-and-fix tool:
 
-- **Fastest:** `llama-3.3-70b-versatile` (the default) — Groq's LPU hardware streams hundreds of tokens per second, so fixes feel instant.
-- **Most powerful on the free tier:** `openai/gpt-oss-120b` — OpenAI's open-weight 120B model, still fast on Groq and free.
+- **Most powerful on the free tier:** `openai/gpt-oss-120b` (the default) — OpenAI's open-weight 120B model, still fast on Groq's LPU hardware.
+- **Fastest:** `llama-3.3-70b-versatile` — hundreds of tokens per second, fixes feel instant.
 
 _Free-tier limits last checked: July 2026._
 

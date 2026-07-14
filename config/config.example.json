@@ -1,7 +1,7 @@
 {
   "debugLogging": true,
-  "provider": "openrouter",
-  "model": "openai/gpt-4.1-mini",
+  "provider": "groq",
+  "model": "openai/gpt-oss-120b",
   "endpoint": null,
   "apiKeyEnv": null,
   "pickerShortcutKey": "0",
