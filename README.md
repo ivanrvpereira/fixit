@@ -37,7 +37,9 @@
 ## Install
 
 ```sh
-brew install --cask ivanrvpereira/tap/fixit
+brew tap ivanrvpereira/tap
+brew trust ivanrvpereira/tap   # Homebrew 6+: allow loading this third-party tap
+brew install --cask fixit
 ```
 
 The first install asks for your login keychain password once: the release binary is re-signed with a local identity so macOS keeps your Accessibility permission across upgrades.
