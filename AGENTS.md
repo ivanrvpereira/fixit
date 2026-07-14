@@ -35,6 +35,11 @@
 - App lifecycle/menu/hotkey changes belong near `AppController` and `HotKeyManager`; see `Sources/Fixit/main.swift:990` and `Sources/Fixit/main.swift:1103`.
 - CLI-only behavior belongs in `runCLI()`; see `Sources/Fixit/main.swift:1220`.
 
+## Releases
+- Push a `v*` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`); the Release workflow builds, packages, and publishes the GitHub release — no local build needed.
+- The workflow renders `packaging/homebrew/fixit.rb` with version/sha and attaches it to the release; manually copy that `fixit.rb` to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap`.
+- Never tag or push to the tap repo without explicit approval.
+
 ## Git
 - Use conventional commits: `type(scope): description`, imperative mood, under 72 characters.
 - Keep commits to one logical change.
