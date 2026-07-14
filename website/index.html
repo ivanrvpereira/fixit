@@ -771,6 +771,66 @@
   }
   .final-cta { text-align: center; margin-top: 2rem; }
 
+  /* Model table */
+  .models-table {
+    max-width: 780px;
+    margin: 0 auto;
+    background: var(--white);
+    border: var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  .models-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.96rem;
+  }
+  .models-table th {
+    font-family: var(--display);
+    font-weight: 800;
+    text-align: left;
+    background: var(--yellow);
+    border-bottom: var(--border);
+    padding: 0.7rem 1.1rem;
+    white-space: nowrap;
+  }
+  .models-table td {
+    padding: 0.65rem 1.1rem;
+    border-bottom: 2px solid rgba(23, 21, 31, 0.08);
+    vertical-align: top;
+  }
+  .models-table tr:last-child td { border-bottom: none; }
+  .models-table td:first-child { font-weight: 700; white-space: nowrap; }
+  .models-table code {
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    font-size: 0.85em;
+    background: var(--cream);
+    border: 1.5px solid rgba(23, 21, 31, 0.25);
+    border-radius: 6px;
+    padding: 0.1em 0.45em;
+    white-space: nowrap;
+  }
+  .models-table .tag {
+    display: inline-block;
+    font-family: var(--display);
+    font-weight: 800;
+    font-size: 0.68rem;
+    background: var(--mint);
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    padding: 0 0.55em;
+    margin-left: 0.5em;
+    vertical-align: middle;
+  }
+  .models-note {
+    text-align: center;
+    max-width: 640px;
+    margin: 1.4rem auto 0;
+    font-size: 0.95rem;
+  }
+  .models-note .fine { display: block; margin-top: 0.3rem; font-size: 0.82rem; opacity: 0.6; }
+
   /* Footer */
   footer.site-footer {
     border-top: var(--border);
@@ -1023,6 +1083,31 @@ one "arr".</code></pre>
       </ol>
 
       <p class="install-notes">That's it. Fixit lives in your menu bar and waits for the hotkey.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="models-title">
+    <div class="wrap">
+      <h2 class="section-title" id="models-title">Which model?</h2>
+      <p class="section-sub">Fixit rewrites short selections, so small fast models are ideal — bigger ones add latency, not better proofreading. Every provider comes with a sensible default.</p>
+      <div class="models-table">
+        <table>
+          <thead>
+            <tr><th>Provider</th><th>Default model</th><th>Free tier</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><a href="https://console.groq.com">Groq</a><span class="tag">default</span></td><td><code>openai/gpt-oss-120b</code></td><td>~14,400 req/day, no card needed</td></tr>
+            <tr><td><a href="https://openrouter.ai">OpenRouter</a></td><td><code>openai/gpt-4.1-mini</code></td><td><code>meta-llama/llama-3.3-70b-instruct:free</code> (~50–200 req/day)</td></tr>
+            <tr><td><a href="https://aistudio.google.com">Gemini</a></td><td><code>gemini-2.0-flash</code></td><td>~1,500 req/day</td></tr>
+            <tr><td><a href="https://console.mistral.ai">Mistral</a></td><td><code>mistral-small-latest</code></td><td>free “Experiment” tier (~1B tokens/month)</td></tr>
+            <tr><td><a href="https://cloud.cerebras.ai">Cerebras</a></td><td><code>llama-3.3-70b</code></td><td>~1M tokens/day</td></tr>
+            <tr><td><a href="https://platform.openai.com">OpenAI</a></td><td><code>gpt-4.1-mini</code></td><td>paid only</td></tr>
+            <tr><td><a href="https://ollama.com">Ollama</a></td><td><code>llama3.2</code></td><td>fully local, no account or key</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="models-note">No key yet? <a href="https://console.groq.com/keys">Grab a free Groq key</a> — the most generous free tier and the fastest fixes.
+        <span class="fine">Free-tier limits last checked: July 2026.</span></p>
       <p class="final-cta"><a class="btn btn--coral" href="https://github.com/ivanrvpereira/fixit">Get Fixit on GitHub</a></p>
     </div>
   </section>
