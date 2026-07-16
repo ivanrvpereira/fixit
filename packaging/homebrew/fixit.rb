@@ -29,11 +29,11 @@ cask "fixit" do
                    args: ["-dr", "com.apple.quarantine", "#{appdir}/Fixit.app"]
   end
 
+  zap trash: "~/.config/fixit"
+
   caveats <<~EOS
     If macOS asks for Accessibility permission again after upgrading from a
     locally re-signed version, re-grant it once in System Settings >
     Privacy & Security > Accessibility.
   EOS
-
-  zap trash: "~/.config/fixit"
 end
