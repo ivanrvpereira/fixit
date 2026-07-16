@@ -36,10 +36,6 @@
 - App lifecycle/menu/hotkey changes belong near `AppController` and `HotKeyManager` in `Sources/Fixit/main.swift`.
 - CLI-only behavior belongs in `runCLI()` in `Sources/Fixit/main.swift`.
 
-## Releases
-- Fully automated from a `v*` tag; read `.agents/skills/release/SKILL.md` before cutting or debugging a release.
-- Never tag, regenerate the signing identity, or push to the tap repo without explicit approval.
-
 ## Git
 - Use conventional commits: `type(scope): description`, imperative mood, under 72 characters.
 - Keep commits to one logical change.
@@ -57,6 +53,7 @@
 - Running recursive formatting over the whole repository.
 
 ### Never
+- Never tag a release, regenerate the signing identity, or push to the tap repo without explicit approval.
 - Never commit secrets, API keys, `.env`, Keychain exports, or real user config.
 - Never overwrite `~/.config/fixit` or `~/.config/word-fixer` from repository tasks.
 - Never hand-edit `.build/` or `dist/`.
