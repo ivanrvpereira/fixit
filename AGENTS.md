@@ -39,7 +39,7 @@
 ## Releases
 - Push a `v*` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`); the Release workflow builds, signs, packages, and publishes the GitHub release — no local build needed.
 - CI signing uses the `SIGNING_CERT_P12`/`SIGNING_CERT_PASSWORD` repo secrets (identity "Fixit Release Signing", created once via `scripts/generate-release-cert.sh`). Rotating the identity forces every user to re-grant Accessibility — never regenerate without explicit approval.
-- The workflow renders `packaging/homebrew/fixit.rb` with version/sha and attaches it to the release; manually copy that `fixit.rb` to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap`.
+- The workflow renders `packaging/homebrew/fixit.rb` with version/sha, attaches it to the release, and pushes it to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap` via the `TAP_PUSH_TOKEN` secret (fine-grained PAT, Contents read/write on the tap repo only). If the secret is missing the step skips and the cask must be copied manually.
 - Never tag or push to the tap repo without explicit approval.
 
 ## Git

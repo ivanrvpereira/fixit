@@ -41,7 +41,7 @@ different signing identity.
 
 ## Releasing
 
-Push a tag like `v0.2.0` and the [release workflow](.github/workflows/release.yml) signs the app with the "Fixit Release Signing" identity (from the `SIGNING_CERT_P12`/`SIGNING_CERT_PASSWORD` repo secrets, created once via `scripts/generate-release-cert.sh`), packages `Fixit-<version>.zip`, and attaches it plus a rendered Homebrew cask to the GitHub release. Copy the attached `fixit.rb` to `Casks/fixit.rb` in the `ivanrvpereira/homebrew-tap` repository. Because every release is signed with the same identity, users' Accessibility grants survive upgrades; the cask's postflight only strips the quarantine flag (the app is not notarized) and never touches the user's keychain.
+Push a tag like `v0.2.0` and the [release workflow](.github/workflows/release.yml) signs the app with the "Fixit Release Signing" identity (from the `SIGNING_CERT_P12`/`SIGNING_CERT_PASSWORD` repo secrets, created once via `scripts/generate-release-cert.sh`), packages `Fixit-<version>.zip`, and attaches it plus a rendered Homebrew cask to the GitHub release. The workflow then pushes the rendered `fixit.rb` to `Casks/fixit.rb` in the `ivanrvpereira/homebrew-tap` repository using the `TAP_PUSH_TOKEN` secret (a fine-grained PAT with Contents read/write on the tap repo only); if the secret is unset, copy the file manually. Because every release is signed with the same identity, users' Accessibility grants survive upgrades; the cask's postflight only strips the quarantine flag (the app is not notarized) and never touches the user's keychain.
 
 ## Troubleshooting
 

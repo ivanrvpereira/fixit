@@ -73,6 +73,31 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "Fixit-$VERSION.zip" fixit.rb \
             --title "Fixit $VERSION" --generate-notes
 
+      # Publish the rendered cask so brew picks up the release. Runs after the
+      # release exists (the cask URL points at its assets). TAP_PUSH_TOKEN is a
+      # fine-grained PAT with Contents read/write on ivanrvpereira/homebrew-tap
+      # only; without it the step skips and the cask is copied manually.
+      - name: Update Homebrew tap
+        env:
+          TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        run: |
+          if [ -z "$TAP_PUSH_TOKEN" ]; then
+            echo "TAP_PUSH_TOKEN not set; copy fixit.rb to the tap manually." >&2
+            exit 0
+          fi
+          TAP="ivanrvpereira/homebrew-tap"
+          export GH_TOKEN="$TAP_PUSH_TOKEN"
+          SHA="$(gh api "repos/$TAP/contents/Casks/fixit.rb" --jq .sha 2>/dev/null || true)"
+          CONTENT="$(base64 -i fixit.rb | tr -d '\n')"
+          if [ -n "$SHA" ]; then
+            gh api -X PUT "repos/$TAP/contents/Casks/fixit.rb" \
+              -f message="fixit $VERSION" -f content="$CONTENT" -f sha="$SHA" >/dev/null
+          else
+            gh api -X PUT "repos/$TAP/contents/Casks/fixit.rb" \
+              -f message="fixit $VERSION" -f content="$CONTENT" >/dev/null
+          fi
+          echo "Updated $TAP Casks/fixit.rb to $VERSION"
+
       # Hosted runners are ephemeral, but delete the signing keychain anyway
       # (defense in depth, and required if this ever moves to a self-hosted runner).
       - name: Delete signing keychain
