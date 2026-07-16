@@ -24,7 +24,7 @@
 - 🎛️ **Fully customizable** — every style is just a Markdown prompt and a shortcut. Edit, rename, add, or remove styles right in Settings.
 - 📡 **Streaming with cancel** — watch the fix arrive token by token; press Esc to cancel mid-flight.
 - 🤖 **Bring your own model** — pick a provider: [OpenRouter](https://openrouter.ai), [OpenAI](https://platform.openai.com), [Groq](https://console.groq.com), [Gemini](https://aistudio.google.com), [Mistral](https://console.mistral.ai), [Cerebras](https://cloud.cerebras.ai), local [Ollama](https://ollama.com), or any OpenAI-compatible endpoint. No subscription, no middleman server. Free tiers cover casual use, and local Ollama needs no account at all.
-- 🔐 **Keys stay in your Keychain** — the API key and model are stored in the macOS login Keychain, not in plain-text config.
+- 🔐 **Keys stay in your Keychain** — the API key is stored in the macOS login Keychain, not in plain-text config.
 - 👻 **Lightweight** — a small menu-bar app with no Dock icon, plus a CLI mode for scripting and testing.
 
 ## How it works
@@ -83,15 +83,15 @@ Fixit rewrites short selections, so small, fast models ("mini", "flash", "small"
 
 | Provider | Default model | Free tier |
 |---|---|---|
-| [Groq](https://console.groq.com) | `openai/gpt-oss-120b` | ~14,400 req/day, no card needed |
+| [Groq](https://console.groq.com) | `openai/gpt-oss-120b` | ~1,000 req/day on the default model, no card needed |
 | [OpenRouter](https://openrouter.ai) | `openai/gpt-4.1-mini` | `meta-llama/llama-3.3-70b-instruct:free` (~50–200 req/day) |
-| [Gemini](https://aistudio.google.com) | `gemini-2.0-flash` | ~1,500 req/day |
-| [Mistral](https://console.mistral.ai) | `mistral-small-latest` | free "Experiment" tier (~1B tokens/month) |
-| [Cerebras](https://cloud.cerebras.ai) | `llama-3.3-70b` | ~1M tokens/day |
+| [Gemini](https://aistudio.google.com) | `gemini-3.5-flash` | ~1,500 req/day |
+| [Mistral](https://console.mistral.ai) | `mistral-small-latest` | free tier, no card needed |
+| [Cerebras](https://cloud.cerebras.ai) | `gpt-oss-120b` | ~1M tokens/day |
 | [OpenAI](https://platform.openai.com) | `gpt-4.1-mini` | paid only |
 | [Ollama](https://ollama.com) | `llama3.2` | fully local, no account or key |
 
-No key yet? Grab a free **Groq** key — the most generous free tier and the fastest responses, which is the whole experience in a select-and-fix tool:
+No key yet? Grab a free **Groq** key — a generous free tier and the fastest responses, which is the whole experience in a select-and-fix tool:
 
 - **Most powerful on the free tier:** `openai/gpt-oss-120b` (the default) — OpenAI's open-weight 120B model, still fast on Groq's LPU hardware.
 - **Fastest:** `llama-3.3-70b-versatile` — hundreds of tokens per second, fixes feel instant.
@@ -118,9 +118,9 @@ OPENROUTER_REFERER=https://example.com
 OPENROUTER_APP_TITLE=Fixit
 ```
 
-The app also accepts `openRouterModel`, `openRouterBaseURL`, `openRouterReferer`, and `openRouterAppTitle` in `~/.config/fixit/config.json`. A model stored in Keychain takes precedence over the model in config. To use the checked-in sample prompts instead, copy `config/config.example.json` to `config/config.json` and run with `FIXIT_CONFIG_DIR=$PWD/config`.
+The app also accepts `openRouterModel`, `openRouterBaseURL`, `openRouterReferer`, and `openRouterAppTitle` in `~/.config/fixit/config.json`. To use the checked-in sample prompts instead, copy `config/config.example.json` to `config/config.json` and run with `FIXIT_CONFIG_DIR=$PWD/config`.
 
-If no Fixit config exists yet, Fixit falls back to an old `~/.config/word-fixer` config.
+If `~/.config/fixit` doesn't exist yet, Fixit falls back to an old `~/.config/word-fixer` config.
 
 </details>
 

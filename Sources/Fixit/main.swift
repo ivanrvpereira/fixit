@@ -68,8 +68,8 @@ enum Provider: String, CaseIterable {
         switch self {
         case .openRouter: "openai/gpt-4.1-mini"
         case .groq: "openai/gpt-oss-120b"
-        case .cerebras: "llama-3.3-70b"
-        case .gemini: "gemini-2.0-flash"
+        case .cerebras: "gpt-oss-120b"
+        case .gemini: "gemini-3.5-flash"
         case .openAI: "gpt-4.1-mini"
         case .mistral: "mistral-small-latest"
         case .ollama: "llama3.2"
@@ -100,12 +100,12 @@ enum Provider: String, CaseIterable {
     /// One-line hint shown under the API key field in Settings and the setup guide.
     var helpText: String {
         switch self {
-        case .groq: "Generous free tier (~14,400 requests/day), no card needed, fastest responses."
+        case .groq: "Free tier (~1,000 requests/day on the default model), no card needed, fastest responses."
         case .openRouter: "One key for hundreds of models, pay-as-you-go."
         case .cerebras: "Free tier (~1M tokens/day), no card needed."
         case .gemini: "Free tier (~1,500 requests/day)."
         case .openAI: "Paid account required."
-        case .mistral: "Free \"Experiment\" tier available."
+        case .mistral: "Free tier available, no card needed."
         case .ollama: "Runs models locally — no account or key needed."
         case .custom: "Any OpenAI-compatible chat-completions endpoint."
         }
@@ -2259,8 +2259,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         onFinish?()
     }
 
-    // Writes the provider/key plus a default config.json, so the app is
-    // immediately usable and onboarding never shows again.
+    // Writes the provider/key plus a default config.json, so onboarding
+    // never shows again.
     private func persistSetup() throws {
         let provider = selectedProvider
         if provider != .ollama {
@@ -2963,7 +2963,7 @@ func runCLIFix(styleID: String?, inlineText: String?) async throws {
         text = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
     }
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-        throw FixitError.noSelection
+        throw FixitError.configuration("No text to fix. Pass it with --text or pipe it on stdin.")
     }
 
     let config = try RuntimeConfig.load()
@@ -3004,12 +3004,12 @@ func printCLIUsage() {
           Show this help.
 
     Fix options:
-      --style <id>   Style id from config.json (default: native).
+      --style <id>   Style id from config.json (default: native if present, else the first style).
       --text <text>  Text to fix; reads stdin when omitted.
 
     Global options:
       --help, -h      Show this help.
-      --version, -v   Show the version.
+      --version, -v   Show the version (as the first argument).
     """)
 }
 
