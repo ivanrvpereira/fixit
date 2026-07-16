@@ -37,11 +37,8 @@
 - CLI-only behavior belongs in `runCLI()` in `Sources/Fixit/main.swift`.
 
 ## Releases
-- Push a `v*` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`); the Release workflow builds, signs, packages, and publishes the GitHub release — no local build needed.
-- CI signing uses the `SIGNING_CERT_P12`/`SIGNING_CERT_PASSWORD` repo secrets (identity "Fixit Release Signing", created once via `scripts/generate-release-cert.sh`). Rotating the identity forces every user to re-grant Accessibility — never regenerate without explicit approval.
-- The workflow renders `packaging/homebrew/fixit.rb` with version/sha, lints it with `brew style` in tap context before publishing, attaches it to the release, and pushes it to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap` via the `TAP_PUSH_TOKEN` secret (fine-grained PAT, Contents read/write on the tap repo only). If the secret is missing the step skips and the cask must be copied manually.
-- After pushing the cask, the workflow polls the tap's CI on that commit and fails the release run if the tap goes red or times out (~20 min).
-- Never tag or push to the tap repo without explicit approval.
+- Fully automated from a `v*` tag; read `.agents/skills/release/SKILL.md` before cutting or debugging a release.
+- Never tag, regenerate the signing identity, or push to the tap repo without explicit approval.
 
 ## Git
 - Use conventional commits: `type(scope): description`, imperative mood, under 72 characters.
