@@ -35,6 +35,14 @@ cp "Resources/Info.plist" "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_DISPLAY_NAME" "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$CONTENTS/Info.plist"
+# Stamp the bundle with a real version so local builds don't report the
+# checked-in plist placeholder. APP_VERSION wins (CI passes the tag version);
+# otherwise fall back to the latest release tag, keeping the plist value if
+# there are no tags.
+APP_VERSION="${APP_VERSION:-$(git -C "$ROOT" describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}"
+if [[ -n "$APP_VERSION" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$CONTENTS/Info.plist"
+fi
 if [[ -n "$APP_CONFIG_DIR" ]]; then
   /usr/libexec/PlistBuddy -c "Add :LSEnvironment dict" "$CONTENTS/Info.plist"
   /usr/libexec/PlistBuddy -c "Add :LSEnvironment:FIXIT_CONFIG_DIR string $APP_CONFIG_DIR" "$CONTENTS/Info.plist"
