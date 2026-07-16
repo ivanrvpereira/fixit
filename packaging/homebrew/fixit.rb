@@ -1,6 +1,7 @@
 # Cask template for the ivanrvpereira/homebrew-tap repository.
-# The release workflow fills in the version and sha256 placeholders and attaches
-# the rendered fixit.rb to each GitHub release; copy it to Casks/fixit.rb in the tap.
+# The release workflow fills in the version and sha256 placeholders, attaches
+# the rendered fixit.rb to each GitHub release, and pushes it to Casks/fixit.rb
+# in the tap (copy it manually only if TAP_PUSH_TOKEN is unset).
 cask "fixit" do
   version "{{VERSION}}"
   sha256 "{{SHA256}}"

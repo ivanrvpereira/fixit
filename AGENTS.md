@@ -1,8 +1,8 @@
 # Fixit
 
 ## Stack
-- Swift Package Manager executable package: Swift tools 6.0, macOS 13+, target `Fixit` in `Package.swift`.
-- macOS app/CLI using AppKit, ApplicationServices, Carbon, Foundation, Security in `Sources/Fixit/main.swift`.
+- Swift Package Manager executable package: Swift tools 6.0, macOS 13+, targets `Fixit` and `FixitTests` in `Package.swift`.
+- macOS app/CLI using AppKit, ApplicationServices, Carbon, Foundation, Security, ServiceManagement in `Sources/Fixit/main.swift`.
 - Perplexity-checked Swift 6 baseline: SwiftPM commands, built-in `swift format`, Swift Testing for new tests; add SwiftLint only after a repo config/plugin exists.
 
 ## Commands
@@ -22,19 +22,19 @@
 | Check Swift file format | `swift format lint -s Sources/Fixit/main.swift` |
 
 ## Structure
-- `Sources/Fixit/main.swift` — app, CLI, config, OpenRouter client, UI, hotkeys; read/write.
+- `Sources/Fixit/main.swift` — app, CLI, config, provider client, UI, hotkeys; read/write.
 - `Resources/Info.plist` — app bundle metadata; edit only for bundle behavior.
 - `config/config.example.json` and `config/styles/*.md` — checked-in sample user config and prompts.
 - `scripts/build-app.sh` — release build, app bundle assembly, codesigning.
 - `.build/` and `dist/` — generated outputs; regenerate instead of editing.
 
 ## Conventions
-- Keep the single executable target unless adding real tests or fixtures.
-- New config fields flow through `FixitConfig` and `RuntimeConfig.load()` before use; see `Sources/Fixit/main.swift:15` and `Sources/Fixit/main.swift:24`.
+- Keep to the existing `Fixit` and `FixitTests` targets unless there is a real need for more.
+- New config fields flow through `FixitConfig` and `RuntimeConfig.load()` (in `Sources/Fixit/main.swift`) before use.
 - Style IDs, prompt paths, and shortcut shapes match `config/config.example.json`.
-- OpenRouter request/response changes belong in `OpenRouterClient`; see `Sources/Fixit/main.swift:481`.
-- App lifecycle/menu/hotkey changes belong near `AppController` and `HotKeyManager`; see `Sources/Fixit/main.swift:990` and `Sources/Fixit/main.swift:1103`.
-- CLI-only behavior belongs in `runCLI()`; see `Sources/Fixit/main.swift:1220`.
+- Provider request/response changes belong in `OpenAICompatibleClient` in `Sources/Fixit/main.swift`.
+- App lifecycle/menu/hotkey changes belong near `AppController` and `HotKeyManager` in `Sources/Fixit/main.swift`.
+- CLI-only behavior belongs in `runCLI()` in `Sources/Fixit/main.swift`.
 
 ## Releases
 - Push a `v*` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`); the Release workflow builds, signs, packages, and publishes the GitHub release — no local build needed.
