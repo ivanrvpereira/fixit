@@ -13,14 +13,14 @@ IDENTITY="${1:-${CODE_SIGN_IDENTITY:-Fixit Local Code Signing}}"
 KEYCHAIN_NAME="fixit-dev-signing.keychain"
 KEYCHAIN="$HOME/Library/Keychains/$KEYCHAIN_NAME-db"
 
+have_identity=0
 if [[ -f "$KEYCHAIN" ]] && security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null | grep -Fq "\"$IDENTITY\""; then
-  printf 'Signing identity already exists: %s\n' "$IDENTITY"
-  exit 0
+  have_identity=1
 fi
 
 # A same-named identity elsewhere (e.g. the login keychain, from the old
 # version of this script) would make codesign's identity lookup ambiguous.
-if security find-identity -p codesigning 2>/dev/null | grep -Fq "\"$IDENTITY\""; then
+if [[ "$have_identity" -eq 0 ]] && security find-identity -p codesigning 2>/dev/null | grep -Fq "\"$IDENTITY\""; then
   printf 'An identity named "%s" already exists in another keychain.\n' "$IDENTITY" >&2
   printf 'Remove the old one first (this may ask for your login password):\n' >&2
   printf '  security find-certificate -c "%s" -p > /tmp/old-cert.pem\n' "$IDENTITY" >&2
@@ -30,10 +30,11 @@ if security find-identity -p codesigning 2>/dev/null | grep -Fq "\"$IDENTITY\"";
   exit 1
 fi
 
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+if [[ "$have_identity" -eq 0 ]]; then
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_DIR"' EXIT
 
-cat >"$TMP_DIR/openssl.cnf" <<EOF
+  cat >"$TMP_DIR/openssl.cnf" <<EOF
 [req]
 distinguished_name = dn
 x509_extensions = ext
@@ -46,21 +47,28 @@ extendedKeyUsage = critical,codeSigning
 basicConstraints = critical,CA:FALSE
 EOF
 
-/usr/bin/openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
-  -keyout "$TMP_DIR/key.pem" -out "$TMP_DIR/cert.pem" \
-  -config "$TMP_DIR/openssl.cnf" >/dev/null 2>&1
+  /usr/bin/openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+    -keyout "$TMP_DIR/key.pem" -out "$TMP_DIR/cert.pem" \
+    -config "$TMP_DIR/openssl.cnf" >/dev/null 2>&1
 
-/usr/bin/openssl pkcs12 -export \
-  -inkey "$TMP_DIR/key.pem" -in "$TMP_DIR/cert.pem" \
-  -name "$IDENTITY" \
-  -out "$TMP_DIR/identity.p12" -passout pass:fixit-temp >/dev/null 2>&1
+  /usr/bin/openssl pkcs12 -export \
+    -inkey "$TMP_DIR/key.pem" -in "$TMP_DIR/cert.pem" \
+    -name "$IDENTITY" \
+    -out "$TMP_DIR/identity.p12" -passout pass:fixit-temp >/dev/null 2>&1
 
-if [[ ! -f "$KEYCHAIN" ]]; then
-  security create-keychain -p "" "$KEYCHAIN_NAME"
+  if [[ ! -f "$KEYCHAIN" ]]; then
+    security create-keychain -p "" "$KEYCHAIN_NAME"
+  fi
 fi
+
+# The steps below are idempotent, so re-running the script repairs the
+# dedicated keychain (auto-lock settings, key ACL, search-list entry) even
+# when the identity already exists.
 security set-keychain-settings "$KEYCHAIN" # no auto-lock
 security unlock-keychain -p "" "$KEYCHAIN"
-security import "$TMP_DIR/identity.p12" -k "$KEYCHAIN" -P fixit-temp -T /usr/bin/codesign
+if [[ "$have_identity" -eq 0 ]]; then
+  security import "$TMP_DIR/identity.p12" -k "$KEYCHAIN" -P fixit-temp -T /usr/bin/codesign
+fi
 security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN" >/dev/null
 
 # codesign only finds identities in keychains on the search list; add ours once.
@@ -75,5 +83,10 @@ if ! security list-keychains -d user | grep -Fq "$KEYCHAIN_NAME"; then
   security list-keychains -d user -s "${existing[@]}" "$KEYCHAIN"
 fi
 
-printf 'Created signing identity "%s" in %s\n' "$IDENTITY" "$KEYCHAIN"
+if [[ "$have_identity" -eq 1 ]]; then
+  printf 'Signing identity already exists: %s\n' "$IDENTITY"
+  printf 'Repaired keychain settings, key ACL, and search-list entry.\n'
+else
+  printf 'Created signing identity "%s" in %s\n' "$IDENTITY" "$KEYCHAIN"
+fi
 printf 'No trust setup or password prompts needed; run "make build" to use it.\n'
