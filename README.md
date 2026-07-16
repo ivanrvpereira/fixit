@@ -42,7 +42,11 @@ brew trust ivanrvpereira/tap   # Homebrew 6+: allow loading this third-party tap
 brew install --cask fixit
 ```
 
-To upgrade later: `brew upgrade --cask fixit`.
+To upgrade to new versions later:
+
+```sh
+brew upgrade --cask fixit
+```
 
 <details>
 <summary>Build from source instead</summary>
