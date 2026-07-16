@@ -66,6 +66,15 @@ jobs:
           sed -e "s/{{VERSION}}/$VERSION/" -e "s/{{SHA256}}/$SHA256/" \
             packaging/homebrew/fixit.rb > fixit.rb
 
+      # Run the same `brew style` check the tap's CI runs, against the
+      # rendered cask in real tap context, so a bad template (e.g. stanza
+      # order) fails the release here instead of turning the tap's CI red.
+      - name: Lint rendered cask
+        run: |
+          brew tap ivanrvpereira/tap
+          cp fixit.rb "$(brew --repository ivanrvpereira/tap)/Casks/fixit.rb"
+          brew style ivanrvpereira/tap
+
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -90,13 +99,43 @@ jobs:
           SHA="$(gh api "repos/$TAP/contents/Casks/fixit.rb" --jq .sha 2>/dev/null || true)"
           CONTENT="$(base64 -i fixit.rb | tr -d '\n')"
           if [ -n "$SHA" ]; then
-            gh api -X PUT "repos/$TAP/contents/Casks/fixit.rb" \
-              -f message="fixit $VERSION" -f content="$CONTENT" -f sha="$SHA" >/dev/null
+            TAP_COMMIT="$(gh api -X PUT "repos/$TAP/contents/Casks/fixit.rb" \
+              -f message="fixit $VERSION" -f content="$CONTENT" -f sha="$SHA" --jq .commit.sha)"
           else
-            gh api -X PUT "repos/$TAP/contents/Casks/fixit.rb" \
-              -f message="fixit $VERSION" -f content="$CONTENT" >/dev/null
+            TAP_COMMIT="$(gh api -X PUT "repos/$TAP/contents/Casks/fixit.rb" \
+              -f message="fixit $VERSION" -f content="$CONTENT" --jq .commit.sha)"
           fi
-          echo "Updated $TAP Casks/fixit.rb to $VERSION"
+          echo "Updated $TAP Casks/fixit.rb to $VERSION ($TAP_COMMIT)"
+          echo "TAP_COMMIT=$TAP_COMMIT" >> "$GITHUB_ENV"
+
+      # Wait for the tap's own CI to pass on the cask commit, so a release
+      # only goes green once the published tap is verified healthy. The tap
+      # is public, so the default token can read its check runs.
+      - name: Verify tap CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$TAP_COMMIT" ]; then
+            echo "No tap commit to verify (tap push skipped)."
+            exit 0
+          fi
+          TAP="ivanrvpereira/homebrew-tap"
+          for _ in $(seq 1 40); do
+            STATE="$(gh api "repos/$TAP/commits/$TAP_COMMIT/check-runs" --jq '
+              [.check_runs[]] |
+              if length == 0 then "pending"
+              elif any(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") then "failure"
+              elif all(.status == "completed") then "success"
+              else "pending" end')"
+            case "$STATE" in
+              success) echo "Tap CI passed for $TAP_COMMIT"; exit 0 ;;
+              failure) echo "Tap CI failed for $TAP_COMMIT: https://github.com/$TAP/commits" >&2; exit 1 ;;
+            esac
+            echo "Tap CI $STATE; waiting..."
+            sleep 30
+          done
+          echo "Timed out waiting for tap CI on $TAP_COMMIT" >&2
+          exit 1
 
       # Hosted runners are ephemeral, but delete the signing keychain anyway
       # (defense in depth, and required if this ever moves to a self-hosted runner).
