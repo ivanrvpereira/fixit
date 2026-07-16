@@ -4,8 +4,9 @@
 
 - API keys are stored in `~/.config/fixit/credentials.json`, readable only
   by your user (permissions `600`) — the same model as `~/.aws/credentials`
-  or the GitHub CLI. Keys saved by older versions in the macOS Keychain are
-  migrated to this file on first use and removed from the Keychain.
+  or the GitHub CLI. Fixit never touches the macOS Keychain; keys saved
+  there by versions before 0.6.0 stay untouched and must be re-entered once
+  in Settings.
 - Keys can alternatively be supplied via environment variables or a local
   `.env` file, which is ignored by git and must never be committed.
 - Selected text is sent only to the provider endpoint you configure; Fixit

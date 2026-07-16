@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import Carbon
 import Foundation
-@preconcurrency import Security
 import ServiceManagement
 
 struct StyleConfig: Codable {
@@ -129,9 +128,6 @@ enum Provider: String, CaseIterable {
         self == .ollama ? "Download Ollama" : "Get a key"
     }
 
-    var keychainAccount: String {
-        apiKeyEnvVars.first ?? "OLLAMA_API_KEY"
-    }
 }
 
 struct FixitConfig: Codable {
@@ -240,7 +236,7 @@ struct RuntimeConfig {
 
         let model: String
         if provider == .openRouter {
-            model = try KeychainStore.openRouterModel() ?? env["FIXIT_MODEL"] ?? env["OPENROUTER_MODEL"] ?? config.model ?? config.openRouterModel ?? provider.defaultModel
+            model = env["FIXIT_MODEL"] ?? env["OPENROUTER_MODEL"] ?? config.model ?? config.openRouterModel ?? provider.defaultModel
         } else {
             model = env["FIXIT_MODEL"] ?? config.model ?? provider.defaultModel
         }
@@ -350,80 +346,11 @@ final class Logger {
     }
 }
 
-/// Legacy store: keys now live in credentials.json (see CredentialsFile).
-/// Kept for reading/deleting entries saved by older versions.
-enum KeychainStore {
-    private static let service = "Fixit"
-    private static let modelAccount = "OPENROUTER_MODEL"
-
-    static func apiKey(provider: Provider) throws -> String? {
-        try value(account: provider.keychainAccount)
-    }
-
-    static func deleteAPIKey(provider: Provider) throws {
-        try delete(account: provider.keychainAccount)
-    }
-
-    // Legacy: the model used to live in the Keychain; it now lives in config.json.
-    static func openRouterModel() throws -> String? {
-        try value(account: modelAccount)
-    }
-
-    static func deleteOpenRouterModel() throws {
-        try delete(account: modelAccount)
-    }
-
-    private static func value(account: String) throws -> String? {
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query(account: account, returnData: true), &item)
-        if status == errSecItemNotFound {
-            return nil
-        }
-        guard status == errSecSuccess else {
-            throw FixitError.configuration(keychainMessage(for: status))
-        }
-        guard let data = item as? Data,
-              let value = String(data: data, encoding: .utf8),
-              !value.isEmpty else {
-            return nil
-        }
-        return value
-    }
-
-    private static func delete(account: String) throws {
-        let status = SecItemDelete(query(account: account))
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw FixitError.configuration(keychainMessage(for: status))
-        }
-    }
-
-    private static func query(account: String, returnData: Bool = false) -> CFDictionary {
-        var query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: account,
-        ]
-        if returnData {
-            query[kSecReturnData] = true
-            query[kSecMatchLimit] = kSecMatchLimitOne
-        }
-        return query as CFDictionary
-    }
-
-    private static func keychainMessage(for status: OSStatus) -> String {
-        if let message = SecCopyErrorMessageString(status, nil) as String? {
-            return "Keychain error: \(message)"
-        }
-        return "Keychain error: \(status)"
-    }
-}
-
 /// Plaintext API-key storage following the aws/cargo "credentials beside
 /// config" convention: `<configDir>/credentials.json`, chmod 600, keyed by
-/// provider id. Preferred over the Keychain because Fixit's self-signed
-/// release identity has no Apple team ID, so file-keychain items pin their
-/// partition to the exact build hash and re-prompt for the login password on
-/// every upgrade.
+/// provider id. Used instead of the Keychain: Fixit's self-signed release
+/// identity has no Apple team ID, so Keychain access would prompt for the
+/// login password on every upgrade.
 enum CredentialsFile {
     static func url(configDir: URL) -> URL {
         configDir.appendingPathComponent("credentials.json")
@@ -507,32 +434,14 @@ enum CredentialStore {
         return nil
     }
 
-    /// credentials.json first, then the legacy Keychain. A successful Keychain
-    /// read (one final password prompt for users who saved keys before
-    /// credentials.json existed) migrates the key into the file and deletes
-    /// the Keychain item so it never prompts again. A denied prompt or any
-    /// other Keychain error is treated as "no stored key".
+    /// Single seam for stored-key reads; grows a Keychain branch once a
+    /// Developer ID (team ID) makes Keychain access prompt-free.
     static func storedAPIKey(provider: Provider, configDir: URL) -> String? {
-        if let fileKey = CredentialsFile.apiKey(provider: provider, configDir: configDir) {
-            return fileKey
-        }
-        guard let keychainKey = (try? KeychainStore.apiKey(provider: provider)) ?? nil,
-              !keychainKey.isEmpty else {
-            return nil
-        }
-        // Only drop the Keychain copy once the file save definitely
-        // succeeded; otherwise the Keychain remains the sole durable copy.
-        if (try? CredentialsFile.saveAPIKey(keychainKey, provider: provider, configDir: configDir)) != nil {
-            try? KeychainStore.deleteAPIKey(provider: provider)
-        }
-        return keychainKey
+        CredentialsFile.apiKey(provider: provider, configDir: configDir)
     }
 
     static func saveAPIKey(_ apiKey: String, provider: Provider, configDir: URL) throws {
         try CredentialsFile.saveAPIKey(apiKey, provider: provider, configDir: configDir)
-        // Keys no longer live in the Keychain; drop any legacy copy so it
-        // can't shadow the file or prompt on future upgrades.
-        try? KeychainStore.deleteAPIKey(provider: provider)
     }
 }
 
@@ -2096,9 +2005,6 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             if provider != .ollama {
                 try CredentialStore.saveAPIKey(apiKeyField.stringValue, provider: provider, configDir: currentConfig.configDir)
             }
-            // The model now lives in config.json; drop the legacy Keychain copy so it can't shadow it.
-            try KeychainStore.deleteOpenRouterModel()
-
             try ConfigStore.save(
                 config: currentConfig,
                 styles: styles,

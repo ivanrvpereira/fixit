@@ -2,7 +2,7 @@
 
 ## Stack
 - Swift Package Manager executable package: Swift tools 6.0, macOS 13+, targets `Fixit` and `FixitTests` in `Package.swift`.
-- macOS app/CLI using AppKit, ApplicationServices, Carbon, Foundation, Security, ServiceManagement in `Sources/Fixit/main.swift`.
+- macOS app/CLI using AppKit, ApplicationServices, Carbon, Foundation, ServiceManagement in `Sources/Fixit/main.swift`.
 - Perplexity-checked Swift 6 baseline: SwiftPM commands, built-in `swift format`, Swift Testing for new tests; add SwiftLint only after a repo config/plugin exists.
 
 ## Commands
@@ -45,7 +45,7 @@
 ### Always
 - Verify Swift changes with `swift build` when the local environment supports SwiftPM sandboxing.
 - Use `swift test` when tests exist; write new tests with Swift Testing.
-- Keep secrets in Keychain, environment, or ignored `.env` files.
+- Keep secrets in `credentials.json` (user config dir), environment, or ignored `.env` files — never the macOS Keychain (no team ID; it prompts on every upgrade).
 
 ### Ask First
 - Adding dependencies, SwiftLint plugins/config, CI, or new package targets.
