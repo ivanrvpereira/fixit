@@ -11,7 +11,8 @@
 | Build debug | `swift build` |
 | Build release | `swift build -c release` |
 | CLI smoke test | `swift run Fixit cli fix --style native --text "lets create a new project on this folder"` |
-| Build signed app bundle | `./scripts/build-app.sh` |
+| Build signed app bundle (release shape) | `./scripts/build-app.sh` |
+| Build/install local dev app (`FixitDev.app`, own bundle id + config dir) | `make deploy` |
 | Run tests | `make test` (wraps `swift test`; fixes Testing.framework paths on CLT-only machines) |
 
 ## File-Scoped Commands
@@ -36,7 +37,8 @@
 - CLI-only behavior belongs in `runCLI()`; see `Sources/Fixit/main.swift:1220`.
 
 ## Releases
-- Push a `v*` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`); the Release workflow builds, packages, and publishes the GitHub release — no local build needed.
+- Push a `v*` tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`); the Release workflow builds, signs, packages, and publishes the GitHub release — no local build needed.
+- CI signing uses the `SIGNING_CERT_P12`/`SIGNING_CERT_PASSWORD` repo secrets (identity "Fixit Release Signing", created once via `scripts/generate-release-cert.sh`). Rotating the identity forces every user to re-grant Accessibility — never regenerate without explicit approval.
 - The workflow renders `packaging/homebrew/fixit.rb` with version/sha and attaches it to the release; manually copy that `fixit.rb` to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap`.
 - Never tag or push to the tap repo without explicit approval.
 

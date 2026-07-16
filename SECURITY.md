@@ -8,6 +8,13 @@
 - Selected text is sent only to the provider endpoint you configure; Fixit
   has no telemetry or analytics.
 
+## Release integrity
+
+- Release binaries are built and signed on GitHub Actions with a stable
+  project signing identity; installing never modifies your keychain.
+- The Homebrew cask verifies the downloaded archive's SHA-256 against the
+  value published with each release.
+
 ## Reporting a vulnerability
 
 Please report security issues privately via

@@ -42,8 +42,6 @@ brew trust ivanrvpereira/tap   # Homebrew 6+: allow loading this third-party tap
 brew install --cask fixit
 ```
 
-The first install asks for your login keychain password once: the release binary is re-signed with a local identity so macOS keeps your Accessibility permission across upgrades.
-
 To upgrade later: `brew upgrade --cask fixit`.
 
 <details>
@@ -55,8 +53,7 @@ The build itself takes about two minutes; if you don't have the Xcode Command Li
 xcode-select --install             # one-time: install the Xcode Command Line Tools (skip if already installed)
 git clone https://github.com/ivanrvpereira/fixit.git
 cd fixit
-./scripts/create-signing-cert.sh   # one-time: create a local signing identity
-make trust-signing                 # one-time: allow codesign to use it without prompts
+./scripts/create-signing-cert.sh   # one-time: create a local signing identity (no prompts)
 make deploy                        # build and install to /Applications
 ```
 

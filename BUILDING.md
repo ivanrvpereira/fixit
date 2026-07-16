@@ -13,15 +13,13 @@ Building requires a local code signing identity:
 ./scripts/create-signing-cert.sh
 ```
 
-This creates a self-signed certificate named `Fixit Local Code Signing` in your login Keychain. Expect a couple of password prompts (trusting the certificate, and later `make trust-signing`). A stable named identity (instead of ad-hoc signing) means macOS keeps the app's Accessibility permission across rebuilds.
-
-If you prefer to create the certificate manually: open **Keychain Access** → **Certificate Assistant** → **Create a Certificate…**, name it `Fixit Local Code Signing`, set Identity Type to **Self-Signed Root** and Certificate Type to **Code Signing**.
+This creates a self-signed certificate named `Fixit Local Code Signing` in a dedicated `fixit-dev-signing` keychain — your login keychain is never touched and there are no password prompts. A stable named identity (instead of ad-hoc signing) means macOS keeps the app's Accessibility permission across rebuilds.
 
 ## 2. Build and run
 
 ```sh
-./scripts/build-app.sh
-open "dist/Fixit.app"
+make build
+open "dist/FixitDev.app"
 ```
 
 Or build and install to `/Applications` in one step:
@@ -30,15 +28,24 @@ Or build and install to `/Applications` in one step:
 make deploy
 ```
 
-Set `CODE_SIGN_IDENTITY` to use a different signing identity.
+Local builds are the **Fixit Dev** variant (`FixitDev.app`, bundle id
+`dev.fixitapp.fixit.dev`, config in `~/.config/fixit-dev`) so they can run
+alongside a brew-installed Fixit.app without sharing its Accessibility grant,
+config, or install path. macOS treats it as a separate app, so grant
+Accessibility once for Fixit Dev too. If you run both at the same time, give
+the dev instance different shortcuts in its own config to avoid hotkey clashes.
+
+Running `./scripts/build-app.sh` directly (no env overrides) produces the
+release-shaped `dist/Fixit.app` instead. Set `CODE_SIGN_IDENTITY` to use a
+different signing identity.
 
 ## Releasing
 
-Push a tag like `v0.2.0` and the [release workflow](.github/workflows/release.yml) builds an ad-hoc-signed `Fixit-<version>.zip` (app + `create-signing-cert.sh`) and attaches it, plus a rendered Homebrew cask, to the GitHub release. Copy the attached `fixit.rb` to `Casks/fixit.rb` in the `ivanrvpereira/homebrew-tap` repository. The cask's postflight re-signs the app with a stable local identity so the Accessibility permission survives upgrades.
+Push a tag like `v0.2.0` and the [release workflow](.github/workflows/release.yml) signs the app with the "Fixit Release Signing" identity (from the `SIGNING_CERT_P12`/`SIGNING_CERT_PASSWORD` repo secrets, created once via `scripts/generate-release-cert.sh`), packages `Fixit-<version>.zip`, and attaches it plus a rendered Homebrew cask to the GitHub release. Copy the attached `fixit.rb` to `Casks/fixit.rb` in the `ivanrvpereira/homebrew-tap` repository. Because every release is signed with the same identity, users' Accessibility grants survive upgrades; the cask's postflight only strips the quarantine flag (the app is not notarized) and never touches the user's keychain.
 
 ## Troubleshooting
 
-- **codesign keeps prompting for your Keychain password** — run `make trust-signing` once.
+- **codesign prompts or can't find the identity** — re-run `./scripts/create-signing-cert.sh`; it repairs the dedicated keychain, its search-list entry, and the key ACL. If you still have an old `Fixit Local Code Signing` identity in your login keychain, the script prints the commands to remove it.
 - **Hotkeys don't do anything** — make sure Fixit has Accessibility permission (System Settings → Privacy & Security → Accessibility). Without it the app can't copy the selection or paste the result.
 
 ## Debug builds

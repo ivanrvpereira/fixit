@@ -12,21 +12,52 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Nothing here pushes via git; gh uses GH_TOKEN explicitly.
+          persist-credentials: false
 
       - name: Set version from tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          # Guard: VERSION is spliced into sed and file names below.
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$'; then
+            echo "Tag does not look like a version: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Resources/Info.plist
 
-      - name: Build app (ad-hoc signed; the cask re-signs locally)
-        run: CODE_SIGN_IDENTITY=- ./scripts/build-app.sh
+      # Official GitHub pattern for signing on macOS runners: import the
+      # identity into an ephemeral keychain that dies with the VM. The cert is
+      # self-signed but stable across releases, so users' Accessibility (TCC)
+      # grants survive upgrades without any local re-signing.
+      - name: Import signing identity
+        env:
+          SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_CERT_P12" ]; then
+            echo "Missing SIGNING_CERT_P12 secret; run scripts/generate-release-cert.sh" >&2
+            exit 1
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          printf '%s' "$SIGNING_CERT_P12" | base64 -d > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/signing.p12" -P "$SIGNING_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          rm -f "$RUNNER_TEMP/signing.p12"
+
+      - name: Build app (signed with the release identity)
+        run: CODE_SIGN_IDENTITY="Fixit Release Signing" ./scripts/build-app.sh
 
       - name: Package
         run: |
           STAGE="$(mktemp -d)"
           cp -R dist/Fixit.app "$STAGE/"
-          cp scripts/create-signing-cert.sh "$STAGE/"
           COPYFILE_DISABLE=1 ditto -c -k "$STAGE" "Fixit-$VERSION.zip"
           echo "SHA256=$(shasum -a 256 "Fixit-$VERSION.zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
@@ -41,3 +72,9 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" "Fixit-$VERSION.zip" fixit.rb \
             --title "Fixit $VERSION" --generate-notes
+
+      # Hosted runners are ephemeral, but delete the signing keychain anyway
+      # (defense in depth, and required if this ever moves to a self-hosted runner).
+      - name: Delete signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
