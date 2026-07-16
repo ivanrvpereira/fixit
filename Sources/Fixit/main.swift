@@ -350,6 +350,8 @@ final class Logger {
     }
 }
 
+/// Legacy store: keys now live in credentials.json (see CredentialsFile).
+/// Kept for reading/deleting entries saved by older versions.
 enum KeychainStore {
     private static let service = "Fixit"
     private static let modelAccount = "OPENROUTER_MODEL"
@@ -358,8 +360,8 @@ enum KeychainStore {
         try value(account: provider.keychainAccount)
     }
 
-    static func saveAPIKey(_ apiKey: String, provider: Provider) throws {
-        try save(apiKey, account: provider.keychainAccount)
+    static func deleteAPIKey(provider: Provider) throws {
+        try delete(account: provider.keychainAccount)
     }
 
     // Legacy: the model used to live in the Keychain; it now lives in config.json.
@@ -386,33 +388,6 @@ enum KeychainStore {
             return nil
         }
         return value
-    }
-
-    private static func save(_ value: String, account: String) throws {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            try delete(account: account)
-            return
-        }
-
-        let data = Data(trimmed.utf8)
-        let updateStatus = SecItemUpdate(query(account: account), [kSecValueData: data] as CFDictionary)
-        if updateStatus == errSecSuccess {
-            return
-        }
-        if updateStatus != errSecItemNotFound {
-            throw FixitError.configuration(keychainMessage(for: updateStatus))
-        }
-
-        let addStatus = SecItemAdd([
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: account,
-            kSecValueData: data,
-        ] as CFDictionary, nil)
-        guard addStatus == errSecSuccess else {
-            throw FixitError.configuration(keychainMessage(for: addStatus))
-        }
     }
 
     private static func delete(account: String) throws {
@@ -443,18 +418,85 @@ enum KeychainStore {
     }
 }
 
-enum CredentialStore {
-    static func apiKey(for config: RuntimeConfig) throws -> String? {
-        try apiKey(provider: config.provider, apiKeyEnv: config.apiKeyEnv)
+/// Plaintext API-key storage following the aws/cargo "credentials beside
+/// config" convention: `<configDir>/credentials.json`, chmod 600, keyed by
+/// provider id. Preferred over the Keychain because Fixit's self-signed
+/// release identity has no Apple team ID, so file-keychain items pin their
+/// partition to the exact build hash and re-prompt for the login password on
+/// every upgrade.
+enum CredentialsFile {
+    static func url(configDir: URL) -> URL {
+        configDir.appendingPathComponent("credentials.json")
     }
 
-    static func apiKey(provider: Provider, apiKeyEnv: String? = nil) throws -> String? {
-        if let keychainKey = try KeychainStore.apiKey(provider: provider), !keychainKey.isEmpty {
-            return keychainKey
+    static func apiKey(provider: Provider, configDir: URL) -> String? {
+        let value = load(configDir: configDir)[provider.rawValue]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value, !value.isEmpty else { return nil }
+        return value
+    }
+
+    /// Saves (or, for an empty key, removes) the provider's entry, preserving
+    /// entries for other providers.
+    static func saveAPIKey(_ apiKey: String, provider: Provider, configDir: URL) throws {
+        // Refuse to save over an existing file we can't parse: silently
+        // rebuilding from [:] would wipe every other provider's key.
+        var entries = try loadForWriting(configDir: configDir)
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            entries.removeValue(forKey: provider.rawValue)
+        } else {
+            entries[provider.rawValue] = trimmed
+        }
+        try write(entries, configDir: configDir)
+    }
+
+    private static func load(configDir: URL) -> [String: String] {
+        (try? loadForWriting(configDir: configDir)) ?? [:]
+    }
+
+    private static func loadForWriting(configDir: URL) throws -> [String: String] {
+        let fileURL = url(configDir: configDir)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [:] }
+        do {
+            let data = try Data(contentsOf: fileURL)
+            return try JSONDecoder().decode([String: String].self, from: data)
+        } catch {
+            throw FixitError.configuration(
+                "\(fileURL.path) is unreadable or not valid JSON; fix or delete it, then save again.")
+        }
+    }
+
+    private static func write(_ entries: [String: String], configDir: URL) throws {
+        try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(entries)
+        let fileURL = url(configDir: configDir)
+        // Secrets file: owner-only, like ~/.aws/credentials. Create the temp
+        // file 0600 from the start (a plain atomic write would briefly leave
+        // the key world-readable), then swap it into place.
+        let tempURL = configDir.appendingPathComponent("credentials.json.\(UUID().uuidString).tmp")
+        guard FileManager.default.createFile(
+            atPath: tempURL.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            throw FixitError.configuration("Could not write \(fileURL.path).")
+        }
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tempURL)
+        } else {
+            try FileManager.default.moveItem(at: tempURL, to: fileURL)
+        }
+    }
+}
+
+enum CredentialStore {
+    static func apiKey(for config: RuntimeConfig) throws -> String? {
+        if let stored = storedAPIKey(provider: config.provider, configDir: config.configDir) {
+            return stored
         }
         let env = DotEnv.loadMergedEnvironment()
-        var names = provider.apiKeyEnvVars
-        if let apiKeyEnv, !apiKeyEnv.isEmpty {
+        var names = config.provider.apiKeyEnvVars
+        if let apiKeyEnv = config.apiKeyEnv, !apiKeyEnv.isEmpty {
             names.insert(apiKeyEnv, at: 0)
         }
         for name in names {
@@ -463,6 +505,34 @@ enum CredentialStore {
             }
         }
         return nil
+    }
+
+    /// credentials.json first, then the legacy Keychain. A successful Keychain
+    /// read (one final password prompt for users who saved keys before
+    /// credentials.json existed) migrates the key into the file and deletes
+    /// the Keychain item so it never prompts again. A denied prompt or any
+    /// other Keychain error is treated as "no stored key".
+    static func storedAPIKey(provider: Provider, configDir: URL) -> String? {
+        if let fileKey = CredentialsFile.apiKey(provider: provider, configDir: configDir) {
+            return fileKey
+        }
+        guard let keychainKey = (try? KeychainStore.apiKey(provider: provider)) ?? nil,
+              !keychainKey.isEmpty else {
+            return nil
+        }
+        // Only drop the Keychain copy once the file save definitely
+        // succeeded; otherwise the Keychain remains the sole durable copy.
+        if (try? CredentialsFile.saveAPIKey(keychainKey, provider: provider, configDir: configDir)) != nil {
+            try? KeychainStore.deleteAPIKey(provider: provider)
+        }
+        return keychainKey
+    }
+
+    static func saveAPIKey(_ apiKey: String, provider: Provider, configDir: URL) throws {
+        try CredentialsFile.saveAPIKey(apiKey, provider: provider, configDir: configDir)
+        // Keys no longer live in the Keychain; drop any legacy copy so it
+        // can't shadow the file or prompt on future upgrades.
+        try? KeychainStore.deleteAPIKey(provider: provider)
     }
 }
 
@@ -1621,7 +1691,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         applyProviderSelection(config.provider)
         pickerShortcutField.stringValue = ShortcutParser.display(key: config.pickerKey, modifiers: config.pickerModifiers)
         launchAtLoginCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        statusLabel.stringValue = "API keys are stored in your login Keychain. Shortcuts and prompts are stored in \(config.configDir.path)."
+        statusLabel.stringValue = "API keys, shortcuts, and prompts are stored in \(config.configDir.path)."
     }
 
     private var selectedProvider: Provider {
@@ -1635,7 +1705,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
     private func applyProviderSelection(_ provider: Provider) {
         let isActive = provider == currentConfig.provider
-        apiKeyField.stringValue = (try? KeychainStore.apiKey(provider: provider)) ?? ""
+        apiKeyField.stringValue = CredentialStore.storedAPIKey(provider: provider, configDir: currentConfig.configDir) ?? ""
         apiKeyField.placeholderString = provider == .ollama ? "No API key required" : "\(provider.label) API key"
         apiKeyField.isEnabled = provider != .ollama
         providerHelpLabel.stringValue = provider.helpText
@@ -2006,7 +2076,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             }
 
             // Validate every shortcut before persisting anything, so a typo
-            // can't leave the Keychain updated but the config unsaved.
+            // can't leave the credentials updated but the config unsaved.
             var styles: [StyleConfig] = []
             var prompts: [String: String] = [:]
             for draft in styleDrafts {
@@ -2024,7 +2094,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             let pickerShortcut = try ShortcutParser.parse(pickerShortcutField.stringValue)
 
             if provider != .ollama {
-                try KeychainStore.saveAPIKey(apiKeyField.stringValue, provider: provider)
+                try CredentialStore.saveAPIKey(apiKeyField.stringValue, provider: provider, configDir: currentConfig.configDir)
             }
             // The model now lives in config.json; drop the legacy Keychain copy so it can't shadow it.
             try KeychainStore.deleteOpenRouterModel()
@@ -2205,7 +2275,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func providerChanged() {
         let provider = selectedProvider
-        apiKeyField.stringValue = (try? KeychainStore.apiKey(provider: provider)) ?? ""
+        apiKeyField.stringValue = CredentialStore.storedAPIKey(provider: provider, configDir: config.configDir) ?? ""
         apiKeyField.placeholderString = provider == .ollama ? "No API key required" : "\(provider.label) API key"
         apiKeyField.isEnabled = provider != .ollama
         providerHelpLabel.stringValue = provider.helpText
@@ -2264,7 +2334,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     private func persistSetup() throws {
         let provider = selectedProvider
         if provider != .ollama {
-            try KeychainStore.saveAPIKey(apiKeyField.stringValue, provider: provider)
+            try CredentialStore.saveAPIKey(apiKeyField.stringValue, provider: provider, configDir: config.configDir)
         }
         try ConfigStore.save(
             config: config,
