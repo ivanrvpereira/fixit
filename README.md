@@ -36,6 +36,10 @@
 
 ## Install
 
+**[Download Fixit.dmg](https://github.com/ivanrvpereira/fixit/releases/latest/download/Fixit.dmg)** — signed and notarized; open it and drag Fixit to Applications. The app updates itself.
+
+Or with Homebrew:
+
 ```sh
 brew tap ivanrvpereira/tap
 brew trust ivanrvpereira/tap   # Homebrew 6+: allow loading this third-party tap

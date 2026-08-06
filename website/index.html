@@ -223,6 +223,20 @@
     margin: 0 auto 1.4rem;
   }
 
+  .hero-cta {
+    margin: 1.6rem 0 0.4rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.7rem;
+  }
+  .hero-cta .btn { font-size: 1.25rem; padding: 0.95rem 2rem; }
+  .hero-cta-alt {
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+  .hero-cta-alt a { color: var(--ink); }
+
   .hero-chips {
     display: flex;
     flex-wrap: wrap;
@@ -899,6 +913,11 @@
         <span class="hero-chip"><span class="dot" aria-hidden="true"></span>No subscription, free tiers work</span>
       </div>
 
+      <p class="hero-cta">
+        <a class="btn btn--coral" href="https://github.com/ivanrvpereira/fixit/releases/latest/download/Fixit.dmg">Download for macOS</a>
+        <span class="hero-cta-alt">Free &amp; open source, no credit card &mdash; or <a href="#install">install with Homebrew</a></span>
+      </p>
+
       <!-- ===== Animated demo window ===== -->
       <div class="demo-stage" id="demo-stage">
         <div class="demo-window" id="demo-window" aria-hidden="true">
@@ -1050,10 +1069,12 @@ one "arr".</code></pre>
   </section>
 
   <!-- ============ INSTALL ============ -->
-  <section aria-labelledby="install-title">
+  <section id="install" aria-labelledby="install-title">
     <div class="wrap">
-      <h2 class="section-title" id="install-title">Install with Homebrew</h2>
-      <p class="section-sub">Open source, Swift 6, macOS 13+. Tap it, trust it, install it.</p>
+      <h2 class="section-title" id="install-title">Install</h2>
+      <p class="section-sub">Open source, Swift 6, macOS 13+. Download the app, or use Homebrew.</p>
+      <p class="final-cta" style="margin: 0 0 2rem;"><a class="btn btn--coral" href="https://github.com/ivanrvpereira/fixit/releases/latest/download/Fixit.dmg">Download Fixit.dmg</a></p>
+      <p class="section-sub">Prefer the terminal?</p>
       <div class="terminal">
         <div class="titlebar">
           <span class="lights" aria-hidden="true"><span class="r"></span><span class="y"></span><span class="g"></span></span>
@@ -1083,7 +1104,7 @@ one "arr".</code></pre>
         </li>
       </ol>
 
-      <p class="install-notes">That's it. Fixit lives in your menu bar and waits for the hotkey.<br>Upgrade to new versions anytime with <code>brew upgrade --cask fixit</code>.</p>
+      <p class="install-notes">That's it. Fixit lives in your menu bar and waits for the hotkey.<br>The app updates itself; Homebrew installs can also <code>brew upgrade --cask fixit</code>.</p>
     </div>
   </section>
 
