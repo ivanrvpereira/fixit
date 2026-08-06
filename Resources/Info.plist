@@ -20,6 +20,10 @@
     <string>1</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/ivanrvpereira/fixit/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>/h64hk4DPfv5ohdoLn4+eyOWd8GkJzbZZvzsELecKpc=</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

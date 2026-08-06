@@ -3,6 +3,7 @@ import ApplicationServices
 import Carbon
 import Foundation
 import ServiceManagement
+import Sparkle
 
 struct StyleConfig: Codable {
     let id: String
@@ -2520,6 +2521,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var settingsWindow: SettingsWindowController?
     private var onboardingWindow: OnboardingWindowController?
+    private var updaterController: SPUStandardUpdaterController?
     private var isProcessing = false
     private var currentFixTask: Task<Void, Never>?
     private var lastTargetApp: NSRunningApplication?
@@ -2539,6 +2541,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         setupAppIcon()
         setupMainMenu()
+        if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
+            updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        }
         setupMenu()
         trackFrontmostApp()
         hotKeys = HotKeyManager(app: self)
@@ -2793,6 +2798,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Check Setup…", action: #selector(openOnboarding), keyEquivalent: ""))
+        if updaterController != nil {
+            menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: ""))
+        }
         menu.addItem(NSMenuItem(title: "Install Command Line Tool…", action: #selector(installCommandLineTool), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         item.menu = menu
@@ -2807,6 +2815,10 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         showSettings()
+    }
+
+    @objc private func checkForUpdates() {
+        updaterController?.checkForUpdates(nil)
     }
 
     @objc private func openOnboarding() {
