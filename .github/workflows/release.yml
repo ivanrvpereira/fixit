@@ -28,31 +28,52 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Resources/Info.plist
 
       # Official GitHub pattern for signing on macOS runners: import the
-      # identity into an ephemeral keychain that dies with the VM. The cert is
-      # self-signed but stable across releases, so users' Accessibility (TCC)
-      # grants survive upgrades without any local re-signing.
+      # Developer ID identity into an ephemeral keychain that dies with the VM.
       - name: Import signing identity
         env:
-          SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
-          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+          DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
         run: |
-          if [ -z "$SIGNING_CERT_P12" ]; then
-            echo "Missing SIGNING_CERT_P12 secret; run scripts/generate-release-cert.sh" >&2
+          if [ -z "$DEVELOPER_ID_CERT_P12" ] || [ -z "$DEVELOPER_ID_CERT_PASSWORD" ]; then
+            echo "Missing required secrets: DEVELOPER_ID_CERT_P12 and DEVELOPER_ID_CERT_PASSWORD" >&2
             exit 1
           fi
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
-          printf '%s' "$SIGNING_CERT_P12" | base64 -d > "$RUNNER_TEMP/signing.p12"
+          printf '%s' "$DEVELOPER_ID_CERT_P12" | base64 -d > "$RUNNER_TEMP/signing.p12"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$RUNNER_TEMP/signing.p12" -P "$SIGNING_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/signing.p12" -P "$DEVELOPER_ID_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -1)"
+          if [ -z "$IDENTITY" ]; then
+            echo "No Developer ID Application identity found in imported certificate" >&2
+            exit 1
+          fi
+          echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
           rm -f "$RUNNER_TEMP/signing.p12"
 
       - name: Build app (signed with the release identity)
-        run: CODE_SIGN_IDENTITY="Fixit Release Signing" ./scripts/build-app.sh
+        run: CODE_SIGN_IDENTITY="$IDENTITY" ./scripts/build-app.sh
+
+      - name: Notarize and staple app
+        env:
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: |
+          if [ -z "$NOTARY_API_KEY_ID" ] || [ -z "$NOTARY_API_ISSUER_ID" ] || [ -z "$NOTARY_API_KEY_P8" ]; then
+            echo "Missing required secrets: NOTARY_API_KEY_ID, NOTARY_API_ISSUER_ID, and NOTARY_API_KEY_P8" >&2
+            exit 1
+          fi
+          printf '%s' "$NOTARY_API_KEY_P8" > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent dist/Fixit.app "$RUNNER_TEMP/Fixit-notarization.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/Fixit-notarization.zip" \
+            --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_API_KEY_ID" \
+            --issuer "$NOTARY_API_ISSUER_ID" --wait
+          xcrun stapler staple dist/Fixit.app
 
       - name: Package
         run: |
@@ -60,6 +81,56 @@ jobs:
           cp -R dist/Fixit.app "$STAGE/"
           COPYFILE_DISABLE=1 ditto -c -k "$STAGE" "Fixit-$VERSION.zip"
           echo "SHA256=$(shasum -a 256 "Fixit-$VERSION.zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Build, notarize, staple DMG
+        env:
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+        run: |
+          STAGE="$(mktemp -d)"
+          cp -R dist/Fixit.app "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "Fixit" -srcfolder "$STAGE" -ov -format UDZO "Fixit-$VERSION.dmg"
+          codesign --force --sign "$IDENTITY" --timestamp "Fixit-$VERSION.dmg"
+          xcrun notarytool submit "Fixit-$VERSION.dmg" \
+            --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_API_KEY_ID" \
+            --issuer "$NOTARY_API_ISSUER_ID" --wait
+          xcrun stapler staple "Fixit-$VERSION.dmg"
+
+      - name: Generate appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+            echo "Missing required secret: SPARKLE_ED_PRIVATE_KEY" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          curl -sL https://github.com/sparkle-project/Sparkle/releases/download/2.9.4/Sparkle-2.9.4.tar.xz \
+            | tar -xJ -C "$RUNNER_TEMP/sparkle" bin/generate_appcast
+          mkdir -p appcast-work
+          gh api repos/ivanrvpereira/fixit/contents/appcast.xml \
+            -H "Accept: application/vnd.github.raw" > appcast-work/appcast.xml \
+            || rm -f appcast-work/appcast.xml
+          cp "Fixit-$VERSION.zip" appcast-work/
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle_ed_key"
+          "$RUNNER_TEMP/sparkle/bin/generate_appcast" \
+            --ed-key-file "$RUNNER_TEMP/sparkle_ed_key" \
+            --download-url-prefix "https://github.com/ivanrvpereira/fixit/releases/download/v$VERSION/" \
+            --link "https://github.com/ivanrvpereira/fixit" appcast-work
+          APPCAST_SHA="$(gh api repos/ivanrvpereira/fixit/contents/appcast.xml --jq .sha 2>/dev/null || true)"
+          CONTENT="$(base64 -i appcast-work/appcast.xml | tr -d '\n')"
+          if [ -n "$APPCAST_SHA" ]; then
+            gh api -X PUT repos/ivanrvpereira/fixit/contents/appcast.xml \
+              -f message="chore(release): appcast for $VERSION" -f content="$CONTENT" \
+              -f sha="$APPCAST_SHA" -f branch=main
+          else
+            gh api -X PUT repos/ivanrvpereira/fixit/contents/appcast.xml \
+              -f message="chore(release): appcast for $VERSION" -f content="$CONTENT" \
+              -f branch=main
+          fi
+          rm -f "$RUNNER_TEMP/sparkle_ed_key"
 
       - name: Render Homebrew cask
         run: |
@@ -79,7 +150,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "Fixit-$VERSION.zip" fixit.rb \
+          # Stable-named copy so the website can link
+          # .../releases/latest/download/Fixit.dmg without per-release updates.
+          cp "Fixit-$VERSION.dmg" Fixit.dmg
+          gh release create "$GITHUB_REF_NAME" "Fixit-$VERSION.zip" "Fixit-$VERSION.dmg" Fixit.dmg fixit.rb \
             --title "Fixit $VERSION" --generate-notes
 
       # Publish the rendered cask so brew picks up the release. Runs after the
@@ -141,4 +215,6 @@ jobs:
       # (defense in depth, and required if this ever moves to a self-hosted runner).
       - name: Delete signing keychain
         if: always()
-        run: security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/sparkle_ed_key"
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true

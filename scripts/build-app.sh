@@ -31,10 +31,19 @@ if [[ -e "$APP_DIR" ]]; then
 fi
 mkdir -p "$MACOS" "$RESOURCES" "$ICONSET"
 cp ".build/release/Fixit" "$MACOS/Fixit"
+FRAMEWORKS="$CONTENTS/Frameworks"
+SPARKLE_FW="$(find "$ROOT/.build/artifacts" -type d -name "Sparkle.framework" -path "*macos*" 2>/dev/null | head -1)"
+[[ -n "$SPARKLE_FW" ]] || { echo "Sparkle.framework not found under .build/artifacts" >&2; exit 1; }
+mkdir -p "$FRAMEWORKS"
+cp -R "$SPARKLE_FW" "$FRAMEWORKS/"
 cp "Resources/Info.plist" "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_DISPLAY_NAME" "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$CONTENTS/Info.plist"
+if [[ "$BUNDLE_ID" != "dev.fixitapp.fixit" ]]; then
+  /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$CONTENTS/Info.plist" || true
+  /usr/libexec/PlistBuddy -c "Delete :SUPublicEDKey" "$CONTENTS/Info.plist" || true
+fi
 # Stamp the bundle with a real version so local builds don't report the
 # checked-in plist placeholder. APP_VERSION wins (CI passes the tag version);
 # otherwise fall back to the latest release tag, keeping the plist value if
@@ -76,9 +85,9 @@ if [[ "$CODE_SIGN_IDENTITY" != "-" && -f "$DEV_KEYCHAIN" ]]; then
   security unlock-keychain -p "" "$DEV_KEYCHAIN" 2>/dev/null || true
 fi
 
-# CODE_SIGN_IDENTITY=- means ad-hoc signing. CI signs with "Fixit Release
-# Signing", a self-signed identity that is untrusted on the runner, so check
-# without -v (which hides untrusted identities that codesign still accepts).
+# CODE_SIGN_IDENTITY=- means ad-hoc signing. Local self-signed identities may
+# be untrusted, so check without -v (which hides untrusted identities that
+# codesign still accepts).
 if [[ "$CODE_SIGN_IDENTITY" != "-" ]] && ! security find-identity -p codesigning | grep -Fq "\"$CODE_SIGN_IDENTITY\""; then
   printf 'Missing code signing identity: %s\n' "$CODE_SIGN_IDENTITY" >&2
   printf 'Run ./scripts/create-signing-cert.sh to create it, or set\n' >&2
@@ -86,7 +95,22 @@ if [[ "$CODE_SIGN_IDENTITY" != "-" ]] && ! security find-identity -p codesigning
   exit 1
 fi
 
-codesign --force --sign "$CODE_SIGN_IDENTITY" --timestamp=none "$APP_DIR"
+if [[ "$CODE_SIGN_IDENTITY" == "Developer ID Application"* ]]; then
+  CODESIGN_FLAGS=(--options runtime --timestamp)
+else
+  CODESIGN_FLAGS=(--timestamp=none)
+fi
+
+SPARKLE_EMBEDDED="$FRAMEWORKS/Sparkle.framework"
+SPARKLE_VERSION="$SPARKLE_EMBEDDED/Versions/B"
+if [[ -e "$SPARKLE_VERSION/XPCServices/Downloader.xpc" ]]; then
+  codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_VERSION/XPCServices/Downloader.xpc"
+fi
+codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_VERSION/XPCServices/Installer.xpc"
+codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_VERSION/Autoupdate"
+codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_VERSION/Updater.app"
+codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_EMBEDDED"
+codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$APP_DIR"
 codesign --verify --strict --verbose=2 "$APP_DIR"
 
 printf 'Built and signed %s\n' "$APP_DIR"
