@@ -22,7 +22,7 @@ Releases are fully automated from a version tag. Never tag without explicit user
 
 ## What the Release workflow does (.github/workflows/release.yml)
 
-1. Validates the tag format and stamps `CFBundleShortVersionString` from it.
+1. Validates the tag format and stamps `CFBundleShortVersionString` and `CFBundleVersion` from it (Sparkle compares `CFBundleVersion`).
 2. Imports the Developer ID identity into an ephemeral keychain, builds a signed `Fixit.app` via `scripts/build-app.sh`, notarizes it, and staples its ticket.
 3. Packages the stapled app as `Fixit-X.Y.Z.zip`, computes its SHA-256, then builds, signs, notarizes, and staples `Fixit-X.Y.Z.dmg`.
 4. Generates and signs the Sparkle appcast, preserving its release history.
