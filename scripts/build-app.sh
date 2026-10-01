@@ -50,7 +50,7 @@ fi
 # there are no tags.
 APP_VERSION="${APP_VERSION:-$(git -C "$ROOT" describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}"
 if [[ -n "$APP_VERSION" ]]; then
-  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$CONTENTS/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" -c "Set :CFBundleVersion $APP_VERSION" "$CONTENTS/Info.plist"
 fi
 if [[ -n "$APP_CONFIG_DIR" ]]; then
   /usr/libexec/PlistBuddy -c "Add :LSEnvironment dict" "$CONTENTS/Info.plist"
