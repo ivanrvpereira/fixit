@@ -119,17 +119,6 @@ jobs:
             --ed-key-file "$RUNNER_TEMP/sparkle_ed_key" \
             --download-url-prefix "https://github.com/ivanrvpereira/fixit/releases/download/v$VERSION/" \
             --link "https://github.com/ivanrvpereira/fixit" appcast-work
-          APPCAST_SHA="$(gh api repos/ivanrvpereira/fixit/contents/appcast.xml --jq .sha 2>/dev/null || true)"
-          CONTENT="$(base64 -i appcast-work/appcast.xml | tr -d '\n')"
-          if [ -n "$APPCAST_SHA" ]; then
-            gh api -X PUT repos/ivanrvpereira/fixit/contents/appcast.xml \
-              -f message="chore(release): appcast for $VERSION" -f content="$CONTENT" \
-              -f sha="$APPCAST_SHA" -f branch=main
-          else
-            gh api -X PUT repos/ivanrvpereira/fixit/contents/appcast.xml \
-              -f message="chore(release): appcast for $VERSION" -f content="$CONTENT" \
-              -f branch=main
-          fi
           rm -f "$RUNNER_TEMP/sparkle_ed_key"
 
       - name: Render Homebrew cask
@@ -155,6 +144,24 @@ jobs:
           cp "Fixit-$VERSION.dmg" Fixit.dmg
           gh release create "$GITHUB_REF_NAME" "Fixit-$VERSION.zip" "Fixit-$VERSION.dmg" Fixit.dmg fixit.rb \
             --title "Fixit $VERSION" --generate-notes
+
+      # Commit the appcast to main only after the release exists, so the live
+      # feed never points installed apps at missing release assets.
+      - name: Publish appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APPCAST_SHA="$(gh api repos/ivanrvpereira/fixit/contents/appcast.xml --jq .sha 2>/dev/null || true)"
+          CONTENT="$(base64 -i appcast-work/appcast.xml | tr -d '\n')"
+          if [ -n "$APPCAST_SHA" ]; then
+            gh api -X PUT repos/ivanrvpereira/fixit/contents/appcast.xml \
+              -f message="chore(release): appcast for $VERSION" -f content="$CONTENT" \
+              -f sha="$APPCAST_SHA" -f branch=main
+          else
+            gh api -X PUT repos/ivanrvpereira/fixit/contents/appcast.xml \
+              -f message="chore(release): appcast for $VERSION" -f content="$CONTENT" \
+              -f branch=main
+          fi
 
       # Publish the rendered cask so brew picks up the release. Runs after the
       # release exists (the cask URL points at its assets). TAP_PUSH_TOKEN is a

@@ -25,12 +25,13 @@ Releases are fully automated from a version tag. Never tag without explicit user
 1. Validates the tag format and stamps `CFBundleShortVersionString` from it.
 2. Imports the Developer ID identity into an ephemeral keychain, builds a signed `Fixit.app` via `scripts/build-app.sh`, notarizes it, and staples its ticket.
 3. Packages the stapled app as `Fixit-X.Y.Z.zip`, computes its SHA-256, then builds, signs, notarizes, and staples `Fixit-X.Y.Z.dmg`.
-4. Generates the Sparkle appcast, preserving its release history, and commits `appcast.xml` to `main`.
+4. Generates and signs the Sparkle appcast, preserving its release history.
 5. Renders `packaging/homebrew/fixit.rb` (fills `{{VERSION}}`/`{{SHA256}}`).
 6. **Lints the rendered cask** with `brew style` in real tap context — template problems (e.g. stanza order) fail the release before anything is published.
 7. Creates the GitHub release with the zip, DMG, and cask attached.
-8. Pushes the cask to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap` via the `TAP_PUSH_TOKEN` secret (fine-grained PAT, Contents read/write on the tap repo only). If the secret is missing the step skips and the cask must be copied manually.
-9. **Verifies the tap**: polls the tap CI check runs on the pushed commit and fails the release run if the tap goes red or doesn't finish within ~20 min.
+8. Commits `appcast.xml` to `main` — only after the release exists, so the feed never points at missing assets.
+9. Pushes the cask to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap` via the `TAP_PUSH_TOKEN` secret (fine-grained PAT, Contents read/write on the tap repo only). If the secret is missing the step skips and the cask must be copied manually.
+10. **Verifies the tap**: polls the tap CI check runs on the pushed commit and fails the release run if the tap goes red or doesn't finish within ~20 min.
 
 ## Signing and notarization
 
