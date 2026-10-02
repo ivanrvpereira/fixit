@@ -22,6 +22,11 @@ import Testing
         #expect(SSELine.parse(line) == .error("rate limited"))
     }
 
+    @Test func parsesStreamedErrorWithNumericCode() {
+        let line = #"data: {"error":{"message":"rate limited","code":429}}"#
+        #expect(SSELine.parse(line) == .error("rate limited"))
+    }
+
     @Test func ignoresNonDataLines() {
         #expect(SSELine.parse("") == .ignored)
         #expect(SSELine.parse(": keep-alive comment") == .ignored)

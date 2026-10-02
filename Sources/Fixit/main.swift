@@ -876,7 +876,6 @@ struct OpenAICompatibleClient {
 
     struct APIError: Decodable {
         let message: String?
-        let code: String?
     }
 
     /// Streams the completion; `onProgress` receives the accumulated text after each delta.
