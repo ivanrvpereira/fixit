@@ -45,11 +45,12 @@
 ### Always
 - Verify Swift changes with `swift build` when the local environment supports SwiftPM sandboxing.
 - Use `swift test` when tests exist; write new tests with Swift Testing.
-- Keep secrets in `credentials.json` (user config dir), environment, or ignored `.env` files — never the macOS Keychain (no team ID; it prompts on every upgrade).
+- Keep secrets in `credentials.json` (user config dir), environment, or ignored `.env` files.
 
 ### Ask First
 - Adding dependencies, SwiftLint plugins/config, CI, or new package targets.
 - Changing `CODE_SIGN_IDENTITY` defaults in `scripts/build-app.sh`.
+- Moving API key storage to the macOS Keychain.
 - Running recursive formatting over the whole repository.
 
 ### Never

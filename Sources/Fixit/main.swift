@@ -349,9 +349,7 @@ final class Logger {
 
 /// Plaintext API-key storage following the aws/cargo "credentials beside
 /// config" convention: `<configDir>/credentials.json`, chmod 600, keyed by
-/// provider id. Used instead of the Keychain: Fixit's self-signed release
-/// identity has no Apple team ID, so Keychain access would prompt for the
-/// login password on every upgrade.
+/// provider id.
 enum CredentialsFile {
     static func url(configDir: URL) -> URL {
         configDir.appendingPathComponent("credentials.json")
@@ -435,8 +433,7 @@ enum CredentialStore {
         return nil
     }
 
-    /// Single seam for stored-key reads; grows a Keychain branch once a
-    /// Developer ID (team ID) makes Keychain access prompt-free.
+    /// Single seam for stored-key reads.
     static func storedAPIKey(provider: Provider, configDir: URL) -> String? {
         CredentialsFile.apiKey(provider: provider, configDir: configDir)
     }
