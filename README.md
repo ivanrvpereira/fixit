@@ -26,6 +26,7 @@
 - 🤖 **Bring your own model** — pick a provider: [OpenRouter](https://openrouter.ai), [OpenAI](https://platform.openai.com), [Groq](https://console.groq.com), [Gemini](https://aistudio.google.com), [Mistral](https://console.mistral.ai), [Cerebras](https://cloud.cerebras.ai), local [Ollama](https://ollama.com), or any OpenAI-compatible endpoint. No subscription, no middleman server. Free tiers cover casual use, and local Ollama needs no account at all.
 - 🔐 **Keys stay on your Mac** — the API key lives in `~/.config/fixit/credentials.json`, readable only by your user, separate from shareable config (the same model as `~/.aws/credentials` or the GitHub CLI).
 - 👻 **Lightweight** — a small menu-bar app with no Dock icon, plus a CLI mode for scripting and testing.
+- 🔄 **One-click updates** — Fixit tells you when a new version is out and installs it when you click Install.
 
 ## How it works
 
@@ -36,7 +37,7 @@
 
 ## Install
 
-**[Download Fixit.dmg](https://github.com/ivanrvpereira/fixit/releases/latest/download/Fixit.dmg)** — signed and notarized; open it and drag Fixit to Applications. The app updates itself.
+**[Download Fixit.dmg](https://github.com/ivanrvpereira/fixit/releases/latest/download/Fixit.dmg)** — signed and notarized; open it and drag Fixit to Applications. New versions install from inside the app.
 
 Or with Homebrew:
 
@@ -51,6 +52,8 @@ To upgrade to new versions later:
 ```sh
 brew upgrade --cask fixit
 ```
+
+Using Fixit 0.6.0 or older? Those versions can't update themselves. Update once with `brew upgrade --cask fixit` or a new DMG download. macOS then asks you to allow Accessibility for Fixit again, one time.
 
 <details>
 <summary>Build from source instead</summary>

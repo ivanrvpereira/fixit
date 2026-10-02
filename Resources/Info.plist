@@ -24,6 +24,8 @@
     <string>https://raw.githubusercontent.com/ivanrvpereira/fixit/main/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>/h64hk4DPfv5ohdoLn4+eyOWd8GkJzbZZvzsELecKpc=</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

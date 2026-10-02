@@ -34,7 +34,7 @@
   "applicationCategory": "UtilitiesApplication",
   "operatingSystem": "macOS 13.0 or later",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-  "downloadUrl": "https://github.com/ivanrvpereira/fixit",
+  "downloadUrl": "https://github.com/ivanrvpereira/fixit/releases/latest/download/Fixit.dmg",
   "license": "https://github.com/ivanrvpereira/fixit/blob/main/LICENSE"
 }
 </script>
@@ -885,7 +885,7 @@
       Fixit
     </a>
     <nav aria-label="Main">
-      <a class="btn" href="https://github.com/ivanrvpereira/fixit">Get Fixit on GitHub</a>
+      <a class="btn" href="https://github.com/ivanrvpereira/fixit/releases/latest/download/Fixit.dmg">Download for macOS</a>
     </nav>
   </div>
 </header>
@@ -1047,7 +1047,8 @@
         <h2 class="section-title" id="customize-title">Every style is just Markdown</h2>
         <p class="section-sub">A style is a Markdown prompt plus a shortcut. That's it. Edit, add, or remove styles in Settings. Make one for commit messages, or one for apologizing to your landlord.</p>
         <ul>
-          <li>Works with OpenRouter, Groq, Gemini, or local Ollama</li>
+          <li>Works with Groq, OpenRouter, Gemini, Mistral, Cerebras, OpenAI, local Ollama, or any OpenAI-compatible endpoint</li>
+          <li>One-click updates from inside the app</li>
           <li>Key stored locally, readable only by your user</li>
           <li>Menu-bar app <em>and</em> a CLI for scripting</li>
         </ul>
@@ -1092,19 +1093,19 @@ one "arr".</code></pre>
       <ol class="steps">
         <li class="step">
           <span class="num" aria-hidden="true">1</span>
-          <p>Grant <strong>Accessibility</strong> permission. <span class="q">It's only used to copy your selection and paste the result back, nothing else.</span></p>
+          <p>Open Fixit and follow the short <strong>setup guide</strong>. <span class="q">You can reopen it any time from the menu-bar icon → Check Setup…</span></p>
         </li>
         <li class="step">
           <span class="num" aria-hidden="true">2</span>
-          <p>Open <strong>Settings</strong> from the menu-bar icon.</p>
+          <p>Grant <strong>Accessibility</strong> permission. <span class="q">It's only used to copy your selection and paste the result back, nothing else.</span></p>
         </li>
         <li class="step">
           <span class="num" aria-hidden="true">3</span>
-          <p>Pick a provider and paste your <strong>API key</strong>. It's stored locally in a file only your user can read — no keychain prompts, ever. <span class="q">Free tiers like Groq or Gemini work great, and local Ollama needs no key at all.</span></p>
+          <p>Pick a provider and paste your <strong>API key</strong>. <span class="q">Free tiers like Groq or Gemini work great, and local Ollama needs no key at all.</span></p>
         </li>
       </ol>
 
-      <p class="install-notes">That's it. Fixit lives in your menu bar and waits for the hotkey.<br>The app updates itself; Homebrew installs can also <code>brew upgrade --cask fixit</code>.</p>
+      <p class="install-notes">That's it. Fixit lives in your menu bar and waits for the hotkey.<br>New versions install from inside the app. Using version 0.6.0 or older? Update once with <code>brew upgrade --cask fixit</code> or a new download, then allow Accessibility for Fixit again.</p>
     </div>
   </section>
 
@@ -1130,7 +1131,7 @@ one "arr".</code></pre>
       </div>
       <p class="models-note">No key yet? <a href="https://console.groq.com/keys">Grab a free Groq key</a> — a generous free tier and the fastest fixes.
         <span class="fine">Free-tier limits last checked: July 2026.</span></p>
-      <p class="final-cta"><a class="btn btn--coral" href="https://github.com/ivanrvpereira/fixit">Get Fixit on GitHub</a></p>
+      <p class="final-cta"><a class="btn btn--coral" href="https://github.com/ivanrvpereira/fixit/releases/latest/download/Fixit.dmg">Download for macOS</a></p>
     </div>
   </section>
 </main>
