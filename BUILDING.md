@@ -57,6 +57,7 @@ Keep the same Developer ID certificate for all releases. A different signing ide
 ## Troubleshooting
 
 - **codesign prompts or can't find the identity** — re-run `./scripts/create-signing-cert.sh`; it repairs the dedicated keychain, its search-list entry, and the key ACL. If you still have an old `Fixit Local Code Signing` identity in your login keychain, the script prints the commands to remove it.
+- **macOS asks for your password when a dev build reads the API key** — local builds are not signed with an Apple team ID, so the Keychain treats each rebuild as a new app. Click **Always Allow** once per rebuild. To avoid the prompt, don't save a key in Fixit Dev and put it in `~/.config/fixit/.env` instead (for example `GROQ_API_KEY=...`).
 - **Hotkeys don't do anything** — make sure Fixit has Accessibility permission (System Settings → Privacy & Security → Accessibility). Without it the app can't copy the selection or paste the result.
 
 ## Debug builds
