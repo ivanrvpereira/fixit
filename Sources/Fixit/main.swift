@@ -403,7 +403,7 @@ enum KeychainStore {
 }
 
 enum CredentialStore {
-    static func apiKey(for config: RuntimeConfig) throws -> String? {
+    static func apiKey(for config: RuntimeConfig) -> String? {
         if let stored = storedAPIKey(provider: config.provider, configDir: config.configDir) {
             return stored
         }
@@ -517,7 +517,7 @@ final class PromptLoader {
         self.config = config
     }
 
-    func prompt(for style: StyleConfig) throws -> String {
+    func prompt(for style: StyleConfig) -> String {
         if let promptFile = style.promptFile {
             let candidates = [
                 config.configDir.appendingPathComponent(promptFile),
@@ -881,7 +881,7 @@ struct OpenAICompatibleClient {
     /// Streams the completion; `onProgress` receives the accumulated text after each delta.
     func fix(text: String, systemPrompt: String, onProgress: (@MainActor @Sendable (String) -> Void)? = nil) async throws -> (text: String, cost: Double?) {
         let provider = config.provider
-        let apiKey = try apiKeyOverride ?? CredentialStore.apiKey(for: config)
+        let apiKey = apiKeyOverride ?? CredentialStore.apiKey(for: config)
         if provider.requiresAPIKey, (apiKey ?? "").isEmpty {
             throw FixitError.missingAPIKey(provider.label)
         }
@@ -1943,7 +1943,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
                 promptFile: style.promptFile ?? "styles/\(style.id).md",
                 label: style.label,
                 shortcut: ShortcutParser.display(key: style.shortcutKey, modifiers: style.shortcutModifiers),
-                prompt: (try? loader.prompt(for: style)) ?? ""
+                prompt: loader.prompt(for: style)
             )
         }
         displayedStyle = nil
@@ -2317,7 +2317,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
             do {
                 let runtime = client.config
                 let style = runtime.styles.first ?? RuntimeConfig.defaultStyles[0]
-                let prompt = try PromptLoader(config: runtime).prompt(for: style)
+                let prompt = PromptLoader(config: runtime).prompt(for: style)
                 let fixed = try await client.fix(text: sampleField.stringValue, systemPrompt: prompt)
                 testResultLabel.stringValue = "→ \(fixed.text)"
             } catch {
@@ -2645,7 +2645,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             let configFileExists = FileManager.default.fileExists(atPath: config.configDir.appendingPathComponent("config.json").path)
             if !configFileExists {
                 showOnboarding()
-            } else if config.provider.requiresAPIKey, ((try? CredentialStore.apiKey(for: config)) ?? nil) == nil {
+            } else if config.provider.requiresAPIKey, CredentialStore.apiKey(for: config) == nil {
                 showSettings(message: FixitError.missingAPIKey(config.provider.label).localizedDescription)
             }
         }
@@ -2658,14 +2658,14 @@ final class AppController: NSObject, NSApplicationDelegate {
 
         Task { @MainActor in
             do {
-                if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
+                if config.provider.requiresAPIKey, CredentialStore.apiKey(for: config) == nil {
                     throw FixitError.missingAPIKey(config.provider.label)
                 }
                 if fromMenu {
                     await refocusTargetApp()
                 }
                 let session = try await captureSession()
-                let systemPrompt = try promptLoader.prompt(for: style)
+                let systemPrompt = promptLoader.prompt(for: style)
                 await performFix(
                     systemPrompt: systemPrompt,
                     input: session.originalText,
@@ -2684,19 +2684,15 @@ final class AppController: NSObject, NSApplicationDelegate {
         isProcessing = true
         Task { @MainActor in
             do {
-                if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
+                if config.provider.requiresAPIKey, CredentialStore.apiKey(for: config) == nil {
                     throw FixitError.missingAPIKey(config.provider.label)
                 }
                 // Capture while the target app is still frontmost; Esc later means nothing happened.
                 let session = try await captureSession()
                 stylePicker.onPick = { [weak self] style in
                     guard let self else { return }
-                    do {
-                        let systemPrompt = try self.promptLoader.prompt(for: style)
-                        self.startFix(systemPrompt: systemPrompt, input: session.originalText, session: session)
-                    } catch {
-                        self.handleTriggerError(error)
-                    }
+                    let systemPrompt = self.promptLoader.prompt(for: style)
+                    self.startFix(systemPrompt: systemPrompt, input: session.originalText, session: session)
                 }
                 stylePicker.onCustom = { [weak self] instruction in
                     guard let self else { return }
@@ -2949,7 +2945,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 do {
                     try reloadRuntime()
                     setupMenu()
-                    if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
+                    if config.provider.requiresAPIKey, CredentialStore.apiKey(for: config) == nil {
                         showSettings(message: FixitError.missingAPIKey(config.provider.label).localizedDescription)
                     }
                 } catch {
@@ -3047,7 +3043,7 @@ func runCLIFix(styleID: String?, inlineText: String?) async throws {
     } else {
         style = config.styles.first(where: { $0.id == "native" }) ?? config.styles.first ?? RuntimeConfig.defaultStyles[0]
     }
-    let prompt = try PromptLoader(config: config).prompt(for: style)
+    let prompt = PromptLoader(config: config).prompt(for: style)
     let client = OpenAICompatibleClient(config: config)
     print(try await client.fix(text: text, systemPrompt: prompt).text)
 }
