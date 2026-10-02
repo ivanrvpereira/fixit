@@ -15,6 +15,8 @@ CODE_SIGN_IDENTITY ?= Fixit Local Code Signing
 DEVELOPER_DIR := $(shell xcode-select -p)
 CLT_TESTING_FRAMEWORKS := $(DEVELOPER_DIR)/Library/Developer/Frameworks
 CLT_TESTING_RPATH := $(DEVELOPER_DIR)/Library/Developer/usr/lib
+# The @Test/@Suite macro plugin lives in a subfolder the compiler doesn't search.
+CLT_TESTING_PLUGINS := $(DEVELOPER_DIR)/usr/lib/swift/host/plugins/testing
 
 .PHONY: build deploy test
 
@@ -27,6 +29,7 @@ test:
 	@if [ -d "$(CLT_TESTING_FRAMEWORKS)/Testing.framework" ]; then \
 		swift test \
 			-Xswiftc -F -Xswiftc "$(CLT_TESTING_FRAMEWORKS)" \
+			-Xswiftc -plugin-path -Xswiftc "$(CLT_TESTING_PLUGINS)" \
 			-Xlinker -F -Xlinker "$(CLT_TESTING_FRAMEWORKS)" \
 			-Xlinker -rpath -Xlinker "$(CLT_TESTING_FRAMEWORKS)" \
 			-Xlinker -rpath -Xlinker "$(CLT_TESTING_RPATH)"; \
