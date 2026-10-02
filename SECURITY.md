@@ -14,8 +14,8 @@
 
 ## Release integrity
 
-- Release binaries are built and signed on GitHub Actions with a stable
-  project signing identity; installing never modifies your keychain.
+- Release builds are made on GitHub Actions, signed with an Apple Developer ID, use the hardened runtime, and are notarized by Apple.
+- In-app updates come from a Sparkle appcast. Sparkle checks the EdDSA signature of each update before it installs the update.
 - The Homebrew cask verifies the downloaded archive's SHA-256 against the
   value published with each release.
 
