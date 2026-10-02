@@ -42,6 +42,7 @@ Releases are fully automated from a version tag. Never tag without explicit user
 
 ## Troubleshooting
 
+- **Notarization fails with HTTP 403 "A required agreement is missing or has expired"**: not a credentials problem. The Account Holder must accept the updated Apple Developer Program License Agreement at developer.apple.com (it can take a while to propagate), then re-run. A 401 instead means a wrong key ID, issuer ID, or a non-Team key.
 - **Cask lint fails**: fix `packaging/homebrew/fixit.rb` in this repo (the tap copy is generated). Verify locally by rendering the template into `$(brew --repository ivanrvpereira/tap)/Casks/fixit.rb` and running `brew style ivanrvpereira/tap` (restore the tap file afterwards).
 - **Tap CI red after a release**: fix the template here first, then push a corrected rendered cask to the tap — only with explicit user approval; never push to the tap repo otherwise.
 - **Tap CI status by hand**: `gh run list --repo ivanrvpereira/homebrew-tap --limit 3`.

@@ -41,7 +41,18 @@ different signing identity.
 
 ## Releasing
 
-Push a tag like `v0.2.0` and the [release workflow](.github/workflows/release.yml) signs the app with the "Fixit Release Signing" identity (from the `SIGNING_CERT_P12`/`SIGNING_CERT_PASSWORD` repo secrets, created once via `scripts/generate-release-cert.sh`), packages `Fixit-<version>.zip`, and attaches it plus a rendered Homebrew cask to the GitHub release. The workflow then pushes the rendered `fixit.rb` to `Casks/fixit.rb` in the `ivanrvpereira/homebrew-tap` repository using the `TAP_PUSH_TOKEN` secret (a fine-grained PAT with Contents read/write on the tap repo only); if the secret is unset, copy the file manually. Because every release is signed with the same identity, users' Accessibility grants survive upgrades; the cask's postflight only strips the quarantine flag (the app is not notarized) and never touches the user's keychain.
+Push a tag like `v0.8.0`. The [release workflow](.github/workflows/release.yml) signs `Fixit.app` with the Developer ID Application certificate, notarizes and staples the app and the DMG, and attaches `Fixit-<version>.zip`, `Fixit-<version>.dmg`, `Fixit.dmg`, and the rendered Homebrew cask to a GitHub release. Then it commits the signed Sparkle `appcast.xml` to `main` and pushes the cask to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap`. The [release skill](.agents/skills/release/SKILL.md) has the full step list and troubleshooting.
+
+The workflow reads these repository secrets:
+
+| Secret | Purpose |
+|---|---|
+| `DEVELOPER_ID_CERT_P12`, `DEVELOPER_ID_CERT_PASSWORD` | Developer ID Application certificate with its private key (base64 `.p12`) and the `.p12` password |
+| `NOTARY_API_KEY_ID`, `NOTARY_API_ISSUER_ID`, `NOTARY_API_KEY_P8` | App Store Connect **Team** API key for `notarytool` (individual keys cannot notarize). Upload the raw `.p8` file, not base64 |
+| `SPARKLE_ED_PRIVATE_KEY` | Signs the Sparkle appcast |
+| `TAP_PUSH_TOKEN` | Fine-grained PAT with Contents read/write on the tap repository only. If it is not set, copy `fixit.rb` to the tap manually |
+
+Keep the same Developer ID certificate for all releases. A different signing identity makes users grant Accessibility again.
 
 ## Troubleshooting
 
