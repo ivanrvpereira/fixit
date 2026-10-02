@@ -209,7 +209,10 @@ struct RuntimeConfig {
         } else {
             config = FixitConfig(debugLogging: false)
         }
+        return try resolve(config, configDir: configDir, env: env)
+    }
 
+    static func resolve(_ config: FixitConfig, configDir: URL, env: [String: String]) throws -> RuntimeConfig {
         let provider: Provider
         if let providerRaw = env["FIXIT_PROVIDER"] ?? config.provider {
             guard let parsed = Provider.from(providerRaw) else {
@@ -404,7 +407,10 @@ enum CredentialStore {
         if let stored = storedAPIKey(provider: config.provider, configDir: config.configDir) {
             return stored
         }
-        let env = DotEnv.loadMergedEnvironment()
+        return environmentAPIKey(for: config, env: DotEnv.loadMergedEnvironment())
+    }
+
+    static func environmentAPIKey(for config: RuntimeConfig, env: [String: String]) -> String? {
         var names = config.provider.apiKeyEnvVars
         if let apiKeyEnv = config.apiKeyEnv, !apiKeyEnv.isEmpty {
             names.insert(apiKeyEnv, at: 0)
@@ -733,7 +739,7 @@ enum ConfigStore {
         }
 
         let existing = loadExistingConfig(from: config.configDir)
-        let savedConfig = FixitConfig(
+        try write(FixitConfig(
             debugLogging: existing?.debugLogging ?? config.debugLogging,
             styles: styles,
             pickerShortcutKey: pickerKey,
@@ -747,23 +753,92 @@ enum ConfigStore {
             openRouterBaseURL: existing?.openRouterBaseURL,
             openRouterReferer: existing?.openRouterReferer,
             openRouterAppTitle: existing?.openRouterAppTitle
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(savedConfig)
-        try data.write(to: config.configDir.appendingPathComponent("config.json"), options: .atomic)
+        ), configDir: config.configDir)
     }
 
-    // Tolerates a malformed config.json: saving from Settings must be able to replace it.
-    private static func loadExistingConfig(from configDir: URL) -> FixitConfig? {
+    static func write(_ config: FixitConfig, configDir: URL) throws {
+        try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(config)
+        try data.write(to: configDir.appendingPathComponent("config.json"), options: .atomic)
+    }
+
+    // Tolerates a malformed config.json: saving from Settings or Check Setup must be able to replace it.
+    static func loadExistingConfig(from configDir: URL) -> FixitConfig? {
         let url = configDir.appendingPathComponent("config.json")
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(FixitConfig.self, from: data)
     }
 }
 
+/// Check Setup's pending provider and API key.
+struct SetupDraft {
+    let configDir: URL
+    let provider: Provider
+    let apiKey: String
+    let env: [String: String]
+
+    // Setup has no endpoint editor, so Custom appears only to keep an existing custom config selected.
+    static func providerChoices(current: Provider) -> [Provider] {
+        Provider.allCases.filter { $0 != .custom || current == .custom }
+    }
+
+    /// Resolves what `save()` would write, without writing it or the key.
+    func testClient() throws -> OpenAICompatibleClient {
+        let runtime = try RuntimeConfig.resolve(pendingConfig(), configDir: configDir, env: env)
+        // FIXIT_PROVIDER outranks config.json; never send this provider's key to another one.
+        guard runtime.provider == provider else {
+            throw FixitError.configuration("FIXIT_PROVIDER selects \(runtime.provider.label), not \(provider.label). Choose \(runtime.provider.label) or unset FIXIT_PROVIDER.")
+        }
+        let typed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A cleared field falls back to the environment, as it will after save; never to the old stored key.
+        let key = typed.isEmpty ? CredentialStore.environmentAPIKey(for: runtime, env: env) ?? "" : typed
+        return OpenAICompatibleClient(config: runtime, apiKeyOverride: key)
+    }
+
+    func save() throws {
+        if provider != .ollama {
+            try CredentialStore.saveAPIKey(apiKey, provider: provider, configDir: configDir)
+        }
+        try ConfigStore.write(pendingConfig(), configDir: configDir)
+    }
+
+    // Only the provider changes; model and endpoint reset to the new provider's defaults.
+    private func pendingConfig() -> FixitConfig {
+        guard let existing = ConfigStore.loadExistingConfig(from: configDir) else {
+            // Fresh (or unreadable) config: write usable defaults so onboarding never shows again.
+            return FixitConfig(
+                debugLogging: false,
+                styles: RuntimeConfig.defaultStyles,
+                pickerShortcutKey: "0",
+                pickerShortcutModifiers: ["command", "shift"],
+                provider: provider.rawValue
+            )
+        }
+        let existingProvider: Provider? = if let raw = existing.provider { Provider.from(raw) } else { .groq }
+        let keepsProvider = existingProvider == provider
+        return FixitConfig(
+            debugLogging: existing.debugLogging,
+            styles: existing.styles,
+            pickerShortcutKey: existing.pickerShortcutKey,
+            pickerShortcutModifiers: existing.pickerShortcutModifiers,
+            provider: provider.rawValue,
+            model: keepsProvider ? existing.model : nil,
+            endpoint: keepsProvider ? existing.endpoint : nil,
+            apiKeyEnv: existing.apiKeyEnv,
+            openRouterModel: existing.openRouterModel,
+            openRouterBaseURL: existing.openRouterBaseURL,
+            openRouterReferer: existing.openRouterReferer,
+            openRouterAppTitle: existing.openRouterAppTitle
+        )
+    }
+}
+
 struct OpenAICompatibleClient {
     let config: RuntimeConfig
+    /// Check Setup tests an unsaved key; "" means no key, never the stored one.
+    var apiKeyOverride: String? = nil
 
     struct RequestBody: Encodable {
         struct Message: Encodable {
@@ -799,7 +874,7 @@ struct OpenAICompatibleClient {
     /// Streams the completion; `onProgress` receives the accumulated text after each delta.
     func fix(text: String, systemPrompt: String, onProgress: (@MainActor @Sendable (String) -> Void)? = nil) async throws -> (text: String, cost: Double?) {
         let provider = config.provider
-        let apiKey = try CredentialStore.apiKey(for: config)
+        let apiKey = try apiKeyOverride ?? CredentialStore.apiKey(for: config)
         if provider.requiresAPIKey, (apiKey ?? "").isEmpty {
             throw FixitError.missingAPIKey(provider.label)
         }
@@ -2051,7 +2126,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
 @MainActor
 final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
-    private let providers = Provider.allCases.filter { $0 != .custom }
+    private var providers: [Provider] = []
     private let providerPopup = NSPopUpButton()
     private let apiKeyField = NSSecureTextField()
     private let providerHelpLabel = NSTextField(labelWithString: "")
@@ -2060,7 +2135,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     private let sampleField = NSTextField(string: "lets create a new project on this folder")
     private let testResultLabel = NSTextField(labelWithString: "")
     private var permissionTimer: Timer?
-    private let config: RuntimeConfig
+    private var config: RuntimeConfig
     var onFinish: (() -> Void)?
 
     init(config: RuntimeConfig) {
@@ -2076,10 +2151,20 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         buildContent()
+        reload(config: config)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func reload(config: RuntimeConfig) {
+        self.config = config
+        providers = SetupDraft.providerChoices(current: config.provider)
+        providerPopup.removeAllItems()
+        providerPopup.addItems(withTitles: providers.map(\.label))
+        providerPopup.selectItem(at: providers.firstIndex(of: config.provider) ?? 0)
+        providerChanged()
     }
 
     func show() {
@@ -2140,7 +2225,6 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         stack.addArrangedSubview(permissionRow)
 
         addLabel("2. Connect a model provider", font: .boldSystemFont(ofSize: 13), to: stack)
-        providerPopup.addItems(withTitles: providers.map(\.label))
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
         stack.addArrangedSubview(providerPopup)
@@ -2154,7 +2238,6 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         providerHelpRow.addArrangedSubview(providerHelpLabel)
         providerHelpRow.addArrangedSubview(providerLinkLabel)
         stack.addArrangedSubview(providerHelpRow)
-        providerChanged()
 
         addLabel("3. Try it", font: .boldSystemFont(ofSize: 13), to: stack)
         sampleField.font = .systemFont(ofSize: 13)
@@ -2210,9 +2293,14 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private var draft: SetupDraft {
+        SetupDraft(configDir: config.configDir, provider: selectedProvider, apiKey: apiKeyField.stringValue, env: DotEnv.loadMergedEnvironment())
+    }
+
     @objc private func testPressed() {
+        let client: OpenAICompatibleClient
         do {
-            try persistSetup()
+            client = try draft.testClient()
         } catch {
             testResultLabel.stringValue = error.localizedDescription
             return
@@ -2220,8 +2308,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         testResultLabel.stringValue = "Contacting \(selectedProvider.label)…"
         Task { @MainActor in
             do {
-                let runtime = try RuntimeConfig.load()
-                let client = OpenAICompatibleClient(config: runtime)
+                let runtime = client.config
                 let style = runtime.styles.first ?? RuntimeConfig.defaultStyles[0]
                 let prompt = try PromptLoader(config: runtime).prompt(for: style)
                 let fixed = try await client.fix(text: sampleField.stringValue, systemPrompt: prompt)
@@ -2234,32 +2321,13 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func finishPressed() {
         do {
-            try persistSetup()
+            try draft.save()
         } catch {
             testResultLabel.stringValue = error.localizedDescription
             return
         }
         close()
         onFinish?()
-    }
-
-    // Writes the provider/key plus a default config.json, so onboarding
-    // never shows again.
-    private func persistSetup() throws {
-        let provider = selectedProvider
-        if provider != .ollama {
-            try CredentialStore.saveAPIKey(apiKeyField.stringValue, provider: provider, configDir: config.configDir)
-        }
-        try ConfigStore.save(
-            config: config,
-            styles: RuntimeConfig.defaultStyles,
-            pickerKey: "0",
-            pickerModifiers: ["command", "shift"],
-            prompts: [:],
-            provider: provider,
-            model: nil,
-            endpoint: nil
-        )
     }
 
     private func refreshPermissionStatus() {
@@ -2882,6 +2950,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        onboardingWindow?.reload(config: config)
         onboardingWindow?.show()
     }
 
