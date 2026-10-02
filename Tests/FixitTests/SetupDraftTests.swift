@@ -118,6 +118,24 @@ import Testing
         #expect(CredentialsFile.apiKey(provider: .groq, configDir: dir) == "gsk_saved")
     }
 
+    @Test func keepingEnvironmentProviderPreservesStoredProviderModelAndEndpoint() throws {
+        let dir = try makeConfigDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let draft = SetupDraft(configDir: dir, provider: .openAI, apiKey: "sk-typed", env: ["FIXIT_PROVIDER": "openai"])
+
+        let tested = try draft.testClient().config
+        try draft.save()
+
+        #expect(tested.model == "my-model")
+        #expect(tested.baseURL.absoluteString == "https://proxy.example/v1/chat/completions")
+        let saved = try #require(ConfigStore.loadExistingConfig(from: dir))
+        #expect(saved.provider == "groq")
+        #expect(saved.model == "my-model")
+        #expect(saved.endpoint == "https://proxy.example/v1/chat/completions")
+        #expect(CredentialsFile.apiKey(provider: .groq, configDir: dir) == "gsk_saved")
+        #expect(CredentialsFile.apiKey(provider: .openAI, configDir: dir) == "sk-typed")
+    }
+
     @Test func freshSetupWritesUsableDefaults() throws {
         let dir = try makeConfigDir(config: nil, credentials: nil)
         defer { try? FileManager.default.removeItem(at: dir) }

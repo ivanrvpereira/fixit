@@ -812,7 +812,7 @@ struct SetupDraft {
         try ConfigStore.write(pendingConfig(), configDir: configDir)
     }
 
-    // Only the provider changes; model and endpoint reset to the new provider's defaults.
+    // Only a provider change rewrites provider and resets model and endpoint to its defaults.
     private func pendingConfig() -> FixitConfig {
         guard let existing = ConfigStore.loadExistingConfig(from: configDir) else {
             // Fresh (or unreadable) config: write usable defaults so onboarding never shows again.
@@ -824,14 +824,17 @@ struct SetupDraft {
                 provider: provider.rawValue
             )
         }
-        let existingProvider: Provider? = if let raw = existing.provider { Provider.from(raw) } else { .groq }
-        let keepsProvider = existingProvider == provider
+        let storedProvider: Provider? = if let raw = existing.provider { Provider.from(raw) } else { .groq }
+        // Setup shows the FIXIT_PROVIDER-resolved provider; keeping it must not persist the env override.
+        let envProvider = env["FIXIT_PROVIDER"].flatMap(Provider.from)
+        // An unknown stored provider is always replaced so the saved config stays loadable.
+        let keepsProvider = storedProvider != nil && (provider == storedProvider || provider == envProvider)
         return FixitConfig(
             debugLogging: existing.debugLogging,
             styles: existing.styles,
             pickerShortcutKey: existing.pickerShortcutKey,
             pickerShortcutModifiers: existing.pickerShortcutModifiers,
-            provider: provider.rawValue,
+            provider: keepsProvider ? existing.provider : provider.rawValue,
             model: keepsProvider ? existing.model : nil,
             endpoint: keepsProvider ? existing.endpoint : nil,
             apiKeyEnv: existing.apiKeyEnv,
