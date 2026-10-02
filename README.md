@@ -24,7 +24,7 @@
 - 🎛️ **Fully customizable** — every style is just a Markdown prompt and a shortcut. Edit, rename, add, or remove styles right in Settings.
 - 📡 **Streaming with cancel** — watch the fix arrive token by token; press Esc to cancel mid-flight.
 - 🤖 **Bring your own model** — pick a provider: [OpenRouter](https://openrouter.ai), [OpenAI](https://platform.openai.com), [Groq](https://console.groq.com), [Gemini](https://aistudio.google.com), [Mistral](https://console.mistral.ai), [Cerebras](https://cloud.cerebras.ai), local [Ollama](https://ollama.com), or any OpenAI-compatible endpoint. No subscription, no middleman server. Free tiers cover casual use, and local Ollama needs no account at all.
-- 🔐 **Keys stay on your Mac** — the API key lives in `~/.config/fixit/credentials.json`, readable only by your user, separate from shareable config (the same model as `~/.aws/credentials` or the GitHub CLI).
+- 🔐 **Keys stay on your Mac** — the API key lives in your macOS Keychain, separate from shareable config.
 - 👻 **Lightweight** — a small menu-bar app with no Dock icon, plus a CLI mode for scripting and testing.
 - 🔄 **One-click updates** — Fixit tells you when a new version is out and installs it when you click Install.
 

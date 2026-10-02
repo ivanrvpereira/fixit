@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon
 import Foundation
+import Security
 import ServiceManagement
 import Sparkle
 
@@ -347,70 +348,62 @@ final class Logger {
     }
 }
 
-/// Plaintext API-key storage following the aws/cargo "credentials beside
-/// config" convention: `<configDir>/credentials.json`, chmod 600, keyed by
-/// provider id.
-enum CredentialsFile {
-    static func url(configDir: URL) -> URL {
-        configDir.appendingPathComponent("credentials.json")
-    }
+/// API keys live in the login keychain: one generic password per provider id,
+/// under a service named after the bundle id so Fixit Dev never shares
+/// Fixit's entries. Developer ID builds get a `teamid:` partition, so signed
+/// updates read their entries without a prompt; self-signed and unsigned
+/// builds are asked again after every rebuild.
+enum KeychainStore {
+    static let service = Bundle.main.bundleIdentifier ?? "dev.fixitapp.fixit"
 
-    static func apiKey(provider: Provider, configDir: URL) -> String? {
-        let value = load(configDir: configDir)[provider.rawValue]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value, !value.isEmpty else { return nil }
+    /// nil when there is no entry or the Keychain refuses (denied prompt,
+    /// locked keychain over SSH), so callers fall through to env vars.
+    static func apiKey(provider: Provider) -> String? {
+        var query = baseQuery(provider)
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let value = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
         return value
     }
 
-    /// Saves (or, for an empty key, removes) the provider's entry, preserving
-    /// entries for other providers.
-    static func saveAPIKey(_ apiKey: String, provider: Provider, configDir: URL) throws {
-        // Refuse to save over an existing file we can't parse: silently
-        // rebuilding from [:] would wipe every other provider's key.
-        var entries = try loadForWriting(configDir: configDir)
+    /// Saves (or, for an empty key, removes) the provider's entry.
+    static func saveAPIKey(_ apiKey: String, provider: Provider) throws {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = baseQuery(provider)
         if trimmed.isEmpty {
-            entries.removeValue(forKey: provider.rawValue)
+            try check(SecItemDelete(query as CFDictionary), allowing: errSecItemNotFound)
+            return
+        }
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData: Data(trimmed.utf8)] as CFDictionary)
+        if status == errSecItemNotFound {
+            try addAPIKeyIfMissing(trimmed, provider: provider)
         } else {
-            entries[provider.rawValue] = trimmed
-        }
-        try write(entries, configDir: configDir)
-    }
-
-    private static func load(configDir: URL) -> [String: String] {
-        (try? loadForWriting(configDir: configDir)) ?? [:]
-    }
-
-    private static func loadForWriting(configDir: URL) throws -> [String: String] {
-        let fileURL = url(configDir: configDir)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [:] }
-        do {
-            let data = try Data(contentsOf: fileURL)
-            return try JSONDecoder().decode([String: String].self, from: data)
-        } catch {
-            throw FixitError.configuration(
-                "\(fileURL.path) is unreadable or not valid JSON; fix or delete it, then save again.")
+            try check(status)
         }
     }
 
-    private static func write(_ entries: [String: String], configDir: URL) throws {
-        try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(entries)
-        let fileURL = url(configDir: configDir)
-        // Secrets file: owner-only, like ~/.aws/credentials. Create the temp
-        // file 0600 from the start (a plain atomic write would briefly leave
-        // the key world-readable), then swap it into place.
-        let tempURL = configDir.appendingPathComponent("credentials.json.\(UUID().uuidString).tmp")
-        guard FileManager.default.createFile(
-            atPath: tempURL.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
-            throw FixitError.configuration("Could not write \(fileURL.path).")
-        }
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tempURL)
-        } else {
-            try FileManager.default.moveItem(at: tempURL, to: fileURL)
+    /// Adds the provider's entry unless one already exists, so the one-time
+    /// migration never overwrites a key saved since.
+    static func addAPIKeyIfMissing(_ apiKey: String, provider: Provider) throws {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var item = baseQuery(provider)
+        item[kSecValueData] = Data(trimmed.utf8)
+        try check(SecItemAdd(item as CFDictionary, nil), allowing: errSecDuplicateItem)
+    }
+
+    private static func baseQuery(_ provider: Provider) -> [CFString: Any] {
+        [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: provider.rawValue]
+    }
+
+    private static func check(_ status: OSStatus, allowing allowed: OSStatus = errSecSuccess) throws {
+        guard status == errSecSuccess || status == allowed else {
+            let message = SecCopyErrorMessageString(status, nil) as String? ?? "\(status)"
+            throw FixitError.configuration("Keychain error: \(message)")
         }
     }
 }
@@ -435,11 +428,42 @@ enum CredentialStore {
 
     /// Single seam for stored-key reads.
     static func storedAPIKey(provider: Provider, configDir: URL) -> String? {
-        CredentialsFile.apiKey(provider: provider, configDir: configDir)
+        migrateLegacyFile(configDir: configDir)
+        return KeychainStore.apiKey(provider: provider)
     }
 
     static func saveAPIKey(_ apiKey: String, provider: Provider, configDir: URL) throws {
-        try CredentialsFile.saveAPIKey(apiKey, provider: provider, configDir: configDir)
+        // Move first, so the old file can't later overwrite a key saved now.
+        migrateLegacyFile(configDir: configDir)
+        try KeychainStore.saveAPIKey(apiKey, provider: provider)
+    }
+
+    private static func migrateLegacyFile(configDir: URL) {
+        // Only a bundled app moves keys: entries created by an unbundled
+        // `swift run` binary are tied to that build, so Fixit.app would then
+        // be asked for the password to read them.
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        LegacyCredentialsMigration.run(configDir: configDir, save: KeychainStore.addAPIKeyIfMissing)
+    }
+}
+
+/// One-time move of API keys from the pre-0.8.0 `<configDir>/credentials.json`
+/// into the Keychain. Existing entries win, and the file is deleted only after
+/// every key is saved.
+/// ponytail: delete this (and its call in CredentialStore) after 0.9.0 ships.
+enum LegacyCredentialsMigration {
+    static func run(configDir: URL, save: (String, Provider) throws -> Void) {
+        let url = configDir.appendingPathComponent("credentials.json")
+        guard let data = try? Data(contentsOf: url),
+              let entries = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        do {
+            for (id, key) in entries {
+                if let provider = Provider(rawValue: id) { try save(key, provider) }
+            }
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            // Keep the file; the next read retries the move.
+        }
     }
 }
 
