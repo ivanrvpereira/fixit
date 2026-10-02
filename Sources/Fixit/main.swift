@@ -588,21 +588,36 @@ final class PromptLoader {
 }
 
 struct ShortcutParser {
+    /// Canonical modifier name for a supported alias, matched case-insensitively.
+    private static func canonicalModifier(_ name: String) -> String? {
+        switch name.lowercased() {
+        case "cmd", "command": "command"
+        case "shift": "shift"
+        case "opt", "option", "alt": "option"
+        case "ctrl", "control": "control"
+        default: nil
+        }
+    }
+
+    /// Deduplicated canonical modifiers in display order; unknown names are dropped.
+    static func normalizedModifiers(_ names: [String]?) -> [String] {
+        let canonical = Set((names ?? []).compactMap(canonicalModifier))
+        return ["command", "shift", "option", "control"].filter(canonical.contains)
+    }
+
     static func display(key: String?, modifiers: [String]?) -> String {
         guard let key, !key.isEmpty else { return "" }
-        let orderedModifiers = ["command", "shift", "option", "control"]
-        let names = orderedModifiers.filter { (modifiers ?? []).contains($0) }
-        return (names + [key]).joined(separator: "+")
+        return (normalizedModifiers(modifiers) + [key]).joined(separator: "+")
     }
 
     static func menuModifiers(for modifiers: [String]?) -> NSEvent.ModifierFlags {
         var flags: NSEvent.ModifierFlags = []
-        for modifier in modifiers ?? [] {
-            switch modifier.lowercased() {
-            case "command", "cmd": flags.insert(.command)
+        for modifier in normalizedModifiers(modifiers) {
+            switch modifier {
+            case "command": flags.insert(.command)
             case "shift": flags.insert(.shift)
-            case "option", "alt": flags.insert(.option)
-            case "control", "ctrl": flags.insert(.control)
+            case "option": flags.insert(.option)
+            case "control": flags.insert(.control)
             default: break
             }
         }
@@ -631,18 +646,11 @@ struct ShortcutParser {
             throw FixitError.configuration("Shortcut must end with a letter or number, like cmd+shift+1.")
         }
 
-        var modifiers: [String] = []
-        for part in parts.dropLast() {
-            switch part {
-            case "cmd", "command": modifiers.append("command")
-            case "shift": modifiers.append("shift")
-            case "opt", "option", "alt": modifiers.append("option")
-            case "ctrl", "control": modifiers.append("control")
-            default: throw FixitError.configuration("Unsupported shortcut modifier: \(part)")
-            }
+        let modifiers = Array(parts.dropLast())
+        if let unknown = modifiers.first(where: { canonicalModifier($0) == nil }) {
+            throw FixitError.configuration("Unsupported shortcut modifier: \(unknown)")
         }
-        let uniqueModifiers = ["command", "shift", "option", "control"].filter { modifiers.contains($0) }
-        return (key, uniqueModifiers)
+        return (key, normalizedModifiers(modifiers))
     }
 
     private static func isSupportedKey(_ key: String) -> Bool {
@@ -2466,12 +2474,12 @@ final class HotKeyManager {
     }
 
     private func modifiers(for names: [String]) -> UInt32 {
-        names.reduce(UInt32(0)) { value, name in
-            switch name.lowercased() {
-            case "command", "cmd": return value | UInt32(cmdKey)
+        ShortcutParser.normalizedModifiers(names).reduce(UInt32(0)) { value, name in
+            switch name {
+            case "command": return value | UInt32(cmdKey)
             case "shift": return value | UInt32(shiftKey)
-            case "option", "alt": return value | UInt32(optionKey)
-            case "control", "ctrl": return value | UInt32(controlKey)
+            case "option": return value | UInt32(optionKey)
+            case "control": return value | UInt32(controlKey)
             default: return value
             }
         }
