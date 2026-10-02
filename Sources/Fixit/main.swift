@@ -378,15 +378,22 @@ enum KeychainStore {
             try check(SecItemDelete(query as CFDictionary), allowing: errSecItemNotFound)
             return
         }
-        let data = Data(trimmed.utf8)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary)
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData: Data(trimmed.utf8)] as CFDictionary)
         if status == errSecItemNotFound {
-            var item = query
-            item[kSecValueData] = data
-            try check(SecItemAdd(item as CFDictionary, nil))
+            try addAPIKeyIfMissing(trimmed, provider: provider)
         } else {
             try check(status)
         }
+    }
+
+    /// Adds the provider's entry unless one already exists, so the one-time
+    /// migration never overwrites a key saved since.
+    static func addAPIKeyIfMissing(_ apiKey: String, provider: Provider) throws {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var item = baseQuery(provider)
+        item[kSecValueData] = Data(trimmed.utf8)
+        try check(SecItemAdd(item as CFDictionary, nil), allowing: errSecDuplicateItem)
     }
 
     private static func baseQuery(_ provider: Provider) -> [CFString: Any] {
@@ -436,12 +443,13 @@ enum CredentialStore {
         // `swift run` binary are tied to that build, so Fixit.app would then
         // be asked for the password to read them.
         guard Bundle.main.bundleIdentifier != nil else { return }
-        LegacyCredentialsMigration.run(configDir: configDir, save: KeychainStore.saveAPIKey)
+        LegacyCredentialsMigration.run(configDir: configDir, save: KeychainStore.addAPIKeyIfMissing)
     }
 }
 
 /// One-time move of API keys from the pre-0.8.0 `<configDir>/credentials.json`
-/// into the Keychain. The file is deleted only after every key is saved.
+/// into the Keychain. Existing entries win, and the file is deleted only after
+/// every key is saved.
 /// ponytail: delete this (and its call in CredentialStore) after 0.9.0 ships.
 enum LegacyCredentialsMigration {
     static func run(configDir: URL, save: (String, Provider) throws -> Void) {
