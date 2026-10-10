@@ -786,6 +786,8 @@ struct SetupDraft {
     let provider: Provider
     let apiKey: String
     let env: [String: String]
+    /// Key-store seam: tests pass a fake so they never touch the login Keychain.
+    var saveAPIKey: (String, Provider, URL) throws -> Void = CredentialStore.saveAPIKey
 
     // Setup has no endpoint editor, so Custom appears only to keep an existing custom config selected.
     static func providerChoices(current: Provider) -> [Provider] {
@@ -807,7 +809,7 @@ struct SetupDraft {
 
     func save() throws {
         if provider != .ollama {
-            try CredentialStore.saveAPIKey(apiKey, provider: provider, configDir: configDir)
+            try saveAPIKey(apiKey, provider, configDir)
         }
         try ConfigStore.write(pendingConfig(), configDir: configDir)
     }
