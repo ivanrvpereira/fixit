@@ -348,16 +348,10 @@ final class Logger {
     }
 }
 
-/// API keys live in the login keychain: one generic password per provider id,
-/// under a service named after the bundle id so Fixit Dev never shares
-/// Fixit's entries. Developer ID builds get a `teamid:` partition, so signed
-/// updates read their entries without a prompt; self-signed and unsigned
-/// builds are asked again after every rebuild.
 enum KeychainStore {
+    // Per bundle id so Fixit Dev never shares Fixit's entries.
     static let service = Bundle.main.bundleIdentifier ?? "dev.fixitapp.fixit"
 
-    /// nil when there is no entry or the Keychain refuses (denied prompt,
-    /// locked keychain over SSH), so callers fall through to env vars.
     static func apiKey(provider: Provider) -> String? {
         var query = baseQuery(provider)
         query[kSecReturnData] = true
@@ -370,7 +364,6 @@ enum KeychainStore {
         return value
     }
 
-    /// Saves (or, for an empty key, removes) the provider's entry.
     static func saveAPIKey(_ apiKey: String, provider: Provider) throws {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = baseQuery(provider)
@@ -386,8 +379,6 @@ enum KeychainStore {
         }
     }
 
-    /// Adds the provider's entry unless one already exists, so the one-time
-    /// migration never overwrites a key saved since.
     static func addAPIKeyIfMissing(_ apiKey: String, provider: Provider) throws {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -433,23 +424,18 @@ enum CredentialStore {
     }
 
     static func saveAPIKey(_ apiKey: String, provider: Provider, configDir: URL) throws {
-        // Move first, so the old file can't later overwrite a key saved now.
+        // Migrate first so the old file can't bring back a key deleted now.
         migrateLegacyFile(configDir: configDir)
         try KeychainStore.saveAPIKey(apiKey, provider: provider)
     }
 
     private static func migrateLegacyFile(configDir: URL) {
-        // Only a bundled app moves keys: entries created by an unbundled
-        // `swift run` binary are tied to that build, so Fixit.app would then
-        // be asked for the password to read them.
+        // Entries created by an unbundled `swift run` binary are tied to that build and would prompt Fixit.app.
         guard Bundle.main.bundleIdentifier != nil else { return }
         LegacyCredentialsMigration.run(configDir: configDir, save: KeychainStore.addAPIKeyIfMissing)
     }
 }
 
-/// One-time move of API keys from the pre-0.8.0 `<configDir>/credentials.json`
-/// into the Keychain. Existing entries win, and the file is deleted only after
-/// every key is saved.
 /// ponytail: delete this (and its call in CredentialStore) after 0.9.0 ships.
 enum LegacyCredentialsMigration {
     static func run(configDir: URL, save: (String, Provider) throws -> Void) {
@@ -462,7 +448,7 @@ enum LegacyCredentialsMigration {
             }
             try FileManager.default.removeItem(at: url)
         } catch {
-            // Keep the file; the next read retries the move.
+            // Keep the file so the next read retries.
         }
     }
 }
