@@ -66,17 +66,6 @@ import Testing
         #expect(withoutEnv.apiKeyOverride == "")
     }
 
-    @Test func testingRefusesTypedKeyWhenEnvironmentForcesAnotherProvider() throws {
-        let dir = try makeConfigDir()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let store = FakeKeyStore()
-        let draft = makeDraft(dir, .groq, key: "gsk_typed", env: ["FIXIT_PROVIDER": "openai"], store: store)
-
-        #expect(throws: FixitError.self) { try draft.testClient() }
-        #expect(try contents(dir, "config.json") == Self.customConfig)
-        #expect(store.saved.isEmpty)
-    }
-
     @Test func customProviderIsOfferedOnlyWhenAlreadyConfigured() {
         #expect(SetupDraft.providerChoices(current: .custom).contains(.custom))
         #expect(!SetupDraft.providerChoices(current: .groq).contains(.custom))
@@ -128,24 +117,6 @@ import Testing
         #expect(store.saved == ["openai=sk-new"])
     }
 
-    @Test func keepingEnvironmentProviderUsesItsDefaultsAndKeepsStoredProviderSettings() throws {
-        let dir = try makeConfigDir()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let store = FakeKeyStore()
-        let draft = makeDraft(dir, .openAI, key: "sk-typed", env: ["FIXIT_PROVIDER": "openai"], store: store)
-
-        let tested = try draft.testClient().config
-        try draft.save()
-
-        #expect(tested.model == "gpt-4.1-mini")
-        #expect(tested.baseURL.absoluteString == "https://api.openai.com/v1/chat/completions")
-        let saved = try #require(ConfigStore.loadExistingConfig(from: dir))
-        #expect(saved.provider == "groq")
-        #expect(saved.savedModel(for: .groq) == "my-model")
-        #expect(saved.savedEndpoint(for: .groq) == "https://proxy.example/v1/chat/completions")
-        #expect(store.saved == ["openai=sk-typed"])
-    }
-
     @Test func freshSetupWritesUsableDefaults() throws {
         let dir = try makeConfigDir(config: nil)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -162,15 +133,14 @@ import Testing
         #expect(store.saved == ["groq=gsk_first"])
     }
 
-    @Test func freshSetupDoesNotSaveEnvironmentProvider() throws {
+    @Test func freshSetupWithNonGroqProviderSavesThatProvider() throws {
         let dir = try makeConfigDir(config: nil)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = FakeKeyStore()
 
-        try makeDraft(dir, .openAI, key: "sk-first", env: ["FIXIT_PROVIDER": "openai"], store: store).save()
+        try makeDraft(dir, .openAI, key: "sk-first", store: store).save()
 
-        let saved = try #require(ConfigStore.loadExistingConfig(from: dir))
-        #expect(saved.provider == nil)
+        #expect(try savedRuntime(dir).provider == .openAI)
         #expect(store.saved == ["openai=sk-first"])
     }
 
@@ -190,6 +160,18 @@ import Testing
         #expect(saved.model == nil)
         #expect(try savedRuntime(dir).provider == .openAI)
         #expect(try savedRuntime(dir).model == "gpt-4.1-mini")
+    }
+
+    @Test func unknownStoredProviderIsReplacedWhenSwitchingToGroq() throws {
+        let dir = try makeConfigDir(config: #"{"provider": "bogus", "styles": []}"#)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = FakeKeyStore()
+
+        try makeDraft(dir, .groq, key: "gsk_new", store: store).save()
+
+        let saved = try #require(ConfigStore.loadExistingConfig(from: dir))
+        #expect(saved.provider == "groq")
+        #expect(try savedRuntime(dir).provider == .groq)
     }
 
     @Test func missingStoredProviderCountsAsGroq() throws {
@@ -251,19 +233,17 @@ import Testing
         #expect(saved.endpoints == ["groq": "https://proxy.example/v1/chat/completions"])
     }
 
-    @Test func environmentModelAndEndpointAreNeverSavedIntoTheMaps() throws {
+    @Test func openRouterEnvironmentOverridesAreNeverSavedIntoTheMapsOnSetupSave() throws {
         let dir = try makeConfigDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = FakeKeyStore()
         let env = [
-            "FIXIT_MODEL": "env/fixit-model",
-            "FIXIT_ENDPOINT": "https://env-fixit.example/v1/chat/completions",
             "OPENROUTER_MODEL": "env/openrouter-model",
             "OPENROUTER_BASE_URL": "https://env-openrouter.example/v1/chat/completions",
         ]
         let draft = makeDraft(dir, .openRouter, key: "sk-or-new", env: env, store: store)
 
-        #expect(try draft.testClient().config.model == "env/fixit-model")
+        #expect(try draft.testClient().config.model == "env/openrouter-model")
         try draft.save()
 
         let saved = try #require(ConfigStore.loadExistingConfig(from: dir))

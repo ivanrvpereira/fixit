@@ -10,40 +10,23 @@ private func decode(_ json: String) throws -> FixitConfig {
 private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
 
 @Suite struct RuntimeConfigResolveTests {
-    @Test func legacyTopLevelModelAndEndpointDoNotLeakToAnotherProvider() throws {
-        let config = try decode(#"{"provider": "groq", "model": "my-model", "endpoint": "https://proxy.example/v1/chat/completions"}"#)
-
-        let runtime = try RuntimeConfig.resolve(config, configDir: tempDir, env: ["FIXIT_PROVIDER": "openai"])
-
-        #expect(runtime.model == "gpt-4.1-mini")
-        #expect(runtime.baseURL.absoluteString == "https://api.openai.com/v1/chat/completions")
-    }
-
     @Test func openRouterBaseURLFromEnvironmentOutranksOnlyTheLegacyOpenRouterBaseURL() throws {
-        let env = ["FIXIT_PROVIDER": "openrouter", "OPENROUTER_BASE_URL": "https://env-openrouter.example/v1/chat/completions"]
-        let legacyOnly = try decode(#"{"openRouterBaseURL": "https://legacy-openrouter.example/v1/chat/completions"}"#)
+        let env = ["OPENROUTER_BASE_URL": "https://env-openrouter.example/v1/chat/completions"]
+        let legacyOnly = try decode(#"{"provider": "openrouter", "openRouterBaseURL": "https://legacy-openrouter.example/v1/chat/completions"}"#)
         let withMapEntry = try decode(#"""
-            {"endpoints": {"openrouter": "https://saved-openrouter.example/v1/chat/completions"}, "openRouterBaseURL": "https://legacy-openrouter.example/v1/chat/completions"}
+            {"provider": "openrouter", "endpoints": {"openrouter": "https://saved-openrouter.example/v1/chat/completions"}, "openRouterBaseURL": "https://legacy-openrouter.example/v1/chat/completions"}
             """#)
 
         #expect(try RuntimeConfig.resolve(legacyOnly, configDir: tempDir, env: env).baseURL.absoluteString == "https://env-openrouter.example/v1/chat/completions")
         #expect(try RuntimeConfig.resolve(withMapEntry, configDir: tempDir, env: env).baseURL.absoluteString == "https://saved-openrouter.example/v1/chat/completions")
     }
 
-    @Test func environmentModelAndEndpointOutrankSavedMapEntries() throws {
-        let config = try decode(#"""
-            {"provider": "openrouter", "models": {"openrouter": "saved/model"}, "endpoints": {"openrouter": "https://saved.example/v1/chat/completions"}}
-            """#)
+    @Test func openRouterModelFromEnvironmentOutranksTheSavedMapEntry() throws {
+        let config = try decode(#"{"provider": "openrouter", "models": {"openrouter": "saved/model"}}"#)
 
-        let fixitEnv = try RuntimeConfig.resolve(config, configDir: tempDir, env: [
-            "FIXIT_MODEL": "env/fixit-model",
-            "FIXIT_ENDPOINT": "https://env-fixit.example/v1/chat/completions",
-        ])
-        let openRouterEnv = try RuntimeConfig.resolve(config, configDir: tempDir, env: ["OPENROUTER_MODEL": "env/openrouter-model"])
+        let runtime = try RuntimeConfig.resolve(config, configDir: tempDir, env: ["OPENROUTER_MODEL": "env/openrouter-model"])
 
-        #expect(fixitEnv.model == "env/fixit-model")
-        #expect(fixitEnv.baseURL.absoluteString == "https://env-fixit.example/v1/chat/completions")
-        #expect(openRouterEnv.model == "env/openrouter-model")
+        #expect(runtime.model == "env/openrouter-model")
     }
 }
 
@@ -125,7 +108,6 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
 
         let shownModel = try savedFile(dir).savedModel(for: .openRouter)
         #expect(shownModel == "anthropic/claude-sonnet-4")
-        #expect(try runtime(dir, env: ["FIXIT_PROVIDER": "openrouter"]).model == "anthropic/claude-sonnet-4")
 
         try save(dir, provider: .openRouter, model: shownModel)
 
@@ -168,9 +150,6 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
         #expect(saved.endpoint == nil)
         #expect(saved.models == ["openrouter": "anthropic/claude-sonnet-4", "groq": "openai/gpt-oss-120b"])
         #expect(saved.endpoints == ["openrouter": "https://proxy.example/v1/chat/completions"])
-        let openRouter = try runtime(dir, env: ["FIXIT_PROVIDER": "openrouter"])
-        #expect(openRouter.model == "anthropic/claude-sonnet-4")
-        #expect(openRouter.baseURL.absoluteString == "https://proxy.example/v1/chat/completions")
     }
 
     @Test func emptyModelFieldRemovesTheProvidersModelSoItsDefaultApplies() throws {
@@ -183,12 +162,10 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
         #expect(try runtime(dir).model == "openai/gpt-4.1-mini")
     }
 
-    @Test func environmentOverridesAreNeverSavedIntoTheMaps() throws {
+    @Test func openRouterEnvironmentOverridesAreNeverSavedIntoTheMapsOnSettingsSave() throws {
         let dir = try makeConfigDir(config: #"{"provider": "openrouter"}"#)
         defer { try? FileManager.default.removeItem(at: dir) }
         let env = [
-            "FIXIT_MODEL": "env/fixit-model",
-            "FIXIT_ENDPOINT": "https://env-fixit.example/v1/chat/completions",
             "OPENROUTER_MODEL": "env/openrouter-model",
             "OPENROUTER_BASE_URL": "https://env-openrouter.example/v1/chat/completions",
         ]

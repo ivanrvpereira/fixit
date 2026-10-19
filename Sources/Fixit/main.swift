@@ -259,19 +259,11 @@ struct RuntimeConfig {
     }
 
     static func resolve(_ config: FixitConfig, configDir: URL, env: [String: String]) throws -> RuntimeConfig {
-        let provider: Provider
-        if let providerRaw = env["FIXIT_PROVIDER"] ?? config.provider {
-            guard let parsed = Provider.from(providerRaw) else {
-                throw FixitError.configuration("Unknown provider: \(providerRaw). Use one of: \(Provider.allCases.map(\.rawValue).joined(separator: ", ")).")
-            }
-            provider = parsed
-        } else {
-            provider = .groq
+        guard let provider = config.storedProvider else {
+            throw FixitError.configuration("Unknown provider: \(config.provider ?? ""). Use one of: \(Provider.allCases.map(\.rawValue).joined(separator: ", ")).")
         }
 
-        let apiKeyEnv = env["FIXIT_API_KEY_ENV"] ?? config.apiKeyEnv
-        let endpointString = env["FIXIT_ENDPOINT"]
-            ?? config.savedEndpoint(for: provider, openRouterBaseURLOverride: env["OPENROUTER_BASE_URL"])
+        let endpointString = config.savedEndpoint(for: provider, openRouterBaseURLOverride: env["OPENROUTER_BASE_URL"])
             ?? provider.defaultEndpoint
         guard let endpointString else {
             throw FixitError.configuration("The custom provider needs an endpoint. Set it in Settings, or add \"endpoints\": {\"custom\": \"https://…\"} to config.json.")
@@ -280,8 +272,7 @@ struct RuntimeConfig {
             throw FixitError.configuration("Invalid \(provider.label) URL: \(endpointString)")
         }
 
-        let model = env["FIXIT_MODEL"]
-            ?? (provider == .openRouter ? env["OPENROUTER_MODEL"] : nil)
+        let model = (provider == .openRouter ? env["OPENROUTER_MODEL"] : nil)
             ?? config.savedModel(for: provider)
             ?? provider.defaultModel
 
@@ -296,7 +287,7 @@ struct RuntimeConfig {
             baseURL: baseURL,
             referer: env["OPENROUTER_REFERER"] ?? config.openRouterReferer,
             appTitle: env["OPENROUTER_APP_TITLE"] ?? config.openRouterAppTitle ?? "Fixit",
-            apiKeyEnv: apiKeyEnv
+            apiKeyEnv: config.apiKeyEnv
         )
     }
 
@@ -842,10 +833,6 @@ struct SetupDraft {
     /// Resolves what `save()` would write, without writing it or the key.
     func testClient() throws -> OpenAICompatibleClient {
         let runtime = try RuntimeConfig.resolve(pendingConfig(), configDir: configDir, env: env)
-        // FIXIT_PROVIDER outranks config.json; never send this provider's key to another one.
-        guard runtime.provider == provider else {
-            throw FixitError.configuration("FIXIT_PROVIDER selects \(runtime.provider.label), not \(provider.label). Choose \(runtime.provider.label) or unset FIXIT_PROVIDER.")
-        }
         let typed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         // A cleared field falls back to the environment, as it will after save; never to the old stored key.
         let key = typed.isEmpty ? CredentialStore.environmentAPIKey(for: runtime, env: env) ?? "" : typed
@@ -861,8 +848,6 @@ struct SetupDraft {
 
     // Only a provider change rewrites provider; every provider keeps its saved model and endpoint.
     private func pendingConfig() -> FixitConfig {
-        // Setup shows the FIXIT_PROVIDER-resolved provider; keeping it must not persist the env override.
-        let envProvider = env["FIXIT_PROVIDER"].flatMap(Provider.from)
         guard let existing = ConfigStore.loadExistingConfig(from: configDir) else {
             // Fresh (or unreadable) config: write usable defaults so onboarding never shows again.
             return FixitConfig(
@@ -870,12 +855,11 @@ struct SetupDraft {
                 styles: RuntimeConfig.defaultStyles,
                 pickerShortcutKey: "0",
                 pickerShortcutModifiers: ["command", "shift"],
-                provider: provider == envProvider ? nil : provider.rawValue
+                provider: provider.rawValue
             )
         }
-        let storedProvider = existing.storedProvider
-        // An unknown stored provider is always replaced so the saved config stays loadable.
-        let keepsProvider = storedProvider != nil && (provider == storedProvider || provider == envProvider)
+        // Keeping the stored provider keeps its exact spelling (or its absence); an unknown stored provider never matches, so it is replaced and the saved config stays loadable.
+        let keepsProvider = existing.storedProvider == provider
         let models = existing.migratedModels
         let endpoints = existing.migratedEndpoints
         return FixitConfig(
@@ -1755,7 +1739,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     }
 
     private func applyProviderSelection(_ provider: Provider) {
-        // Show what config.json saves for this provider, never env overrides, so saving can't persist them.
+        // Show what config.json saves for this provider, never OPENROUTER_MODEL or OPENROUTER_BASE_URL, so saving can't persist them.
         let saved = ConfigStore.loadExistingConfig(from: currentConfig.configDir)
         apiKeyField.stringValue = CredentialStore.storedAPIKey(provider: provider, configDir: currentConfig.configDir) ?? ""
         apiKeyField.placeholderString = provider == .ollama ? "No API key required" : "\(provider.label) API key"
