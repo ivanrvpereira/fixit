@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 
 @testable import Fixit
@@ -51,5 +52,17 @@ import Testing
         let reparsed = try ShortcutParser.parse(display)
         #expect(reparsed.key == shortcut.key)
         #expect(reparsed.modifiers == shortcut.modifiers)
+    }
+
+    @Test func displayKeepsAliasedModifiersThroughParse() throws {
+        let display = ShortcutParser.display(key: "1", modifiers: ["ctrl", "Cmd", "OPT", "shift", "command"])
+        #expect(display == "command+shift+option+control+1")
+        let reparsed = try ShortcutParser.parse(display)
+        #expect(reparsed.modifiers == ["command", "shift", "option", "control"])
+    }
+
+    @Test func menuModifiersAcceptParserAliases() {
+        let flags = ShortcutParser.menuModifiers(for: ["OPT", "Cmd", "cmd"])
+        #expect(flags == [.command, .option])
     }
 }

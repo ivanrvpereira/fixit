@@ -14,7 +14,11 @@ let package = Package(
         .executableTarget(
             name: "Fixit",
             dependencies: [.product(name: "Sparkle", package: "Sparkle")],
-            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
+            // ../Frameworks: app bundle. @executable_path: source builds place Sparkle.framework beside the binary.
+            linkerSettings: [.unsafeFlags([
+                "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
+                "-Xlinker", "-rpath", "-Xlinker", "@executable_path",
+            ])]
         ),
         .testTarget(name: "FixitTests", dependencies: ["Fixit"]),
     ]
