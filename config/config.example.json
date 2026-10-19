@@ -1,8 +1,8 @@
 {
   "debugLogging": true,
   "provider": "groq",
-  "model": "openai/gpt-oss-120b",
-  "endpoint": null,
+  "models": {"groq": "openai/gpt-oss-120b"},
+  "endpoints": {},
   "apiKeyEnv": null,
   "pickerShortcutKey": "0",
   "pickerShortcutModifiers": ["command", "shift"],
