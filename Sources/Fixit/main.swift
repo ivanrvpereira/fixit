@@ -1677,6 +1677,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private let providerLinkLabel = LinkLabel.make()
     private let providerHelpRow = NSStackView()
     private let modelField = NSTextField()
+    private let recommendedModelButton = NSButton(title: "", target: nil, action: nil)
     private let endpointField = NSTextField()
     private let pickerShortcutField = NSTextField()
     private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch Fixit at login", target: nil, action: nil)
@@ -1738,6 +1739,18 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         applyProviderSelection(selectedProvider)
     }
 
+    @objc private func useRecommendedModelPressed() {
+        modelField.stringValue = selectedProvider.defaultModel
+        updateRecommendedModelButton()
+    }
+
+    private func updateRecommendedModelButton() {
+        let defaultModel = selectedProvider.defaultModel
+        recommendedModelButton.title = "Use recommended (\(defaultModel))"
+        recommendedModelButton.isHidden = defaultModel.isEmpty
+        recommendedModelButton.isEnabled = modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) != defaultModel
+    }
+
     private func applyProviderSelection(_ provider: Provider) {
         // Show what config.json saves for this provider, never OPENROUTER_MODEL or OPENROUTER_BASE_URL, so saving can't persist them.
         let saved = ConfigStore.loadExistingConfig(from: currentConfig.configDir)
@@ -1755,6 +1768,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         window?.invalidateCursorRects(for: providerLinkLabel)
         modelField.stringValue = saved?.savedModel(for: provider) ?? provider.defaultModel
         modelField.placeholderString = provider.defaultModel.isEmpty ? "model id" : provider.defaultModel
+        updateRecommendedModelButton()
         endpointField.isEditable = provider == .custom
         endpointField.placeholderString = "https://host/v1/chat/completions"
         endpointField.stringValue = saved?.savedEndpoint(for: provider) ?? provider.defaultEndpoint ?? ""
@@ -1768,6 +1782,8 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         for view in contentView.subviews {
             lines.append("  \(type(of: view)): \(view.frame)")
         }
+        lines.append("  modelField: \(modelField.convert(modelField.bounds, to: contentView))")
+        lines.append("  recommendedModelButton: \(recommendedModelButton.convert(recommendedModelButton.bounds, to: contentView)) hidden=\(recommendedModelButton.isHidden) enabled=\(recommendedModelButton.isEnabled) title=\(recommendedModelButton.title)")
         FileHandle.standardError.write(Data((lines.joined(separator: "\n") + "\n").utf8))
         if let rep = contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds) {
             contentView.cacheDisplay(in: contentView.bounds, to: rep)
@@ -1815,11 +1831,20 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         providerHelpRow.addArrangedSubview(providerHelpLabel)
         providerHelpRow.addArrangedSubview(providerLinkLabel)
 
+        modelField.delegate = self
+        recommendedModelButton.target = self
+        recommendedModelButton.action = #selector(useRecommendedModelPressed)
+        recommendedModelButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        let modelRow = NSStackView(views: [modelField, recommendedModelButton])
+        modelRow.orientation = .horizontal
+        modelRow.alignment = .firstBaseline
+        modelRow.spacing = 8
+
         let formGrid = NSGridView(views: [
             [formLabel("Provider:"), providerPopup],
             [formLabel("API Key:"), apiKeyField],
             [NSGridCell.emptyContentView, providerHelpRow],
-            [formLabel("Model:"), modelField],
+            [formLabel("Model:"), modelRow],
             [formLabel("Endpoint:"), endpointField],
             [formLabel("Picker Shortcut:"), pickerShortcutField],
             [NSGridCell.emptyContentView, launchAtLoginCheckbox],
@@ -2041,8 +2066,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         promptView.string = displayedStyle?.prompt ?? ""
     }
 
-    // Keep the sidebar name in sync while the user types.
+    // Keep the sidebar name and the recommended-model button in sync while the user types.
     func controlTextDidChange(_ notification: Notification) {
+        if (notification.object as? NSTextField) === modelField {
+            updateRecommendedModelButton()
+            return
+        }
         guard (notification.object as? NSTextField) === styleNameField,
               let draft = displayedStyle,
               let row = styleDrafts.firstIndex(where: { $0 === draft }) else { return }
