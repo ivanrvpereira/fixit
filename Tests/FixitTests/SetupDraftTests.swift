@@ -161,4 +161,45 @@ import Testing
         #expect(runtime.baseURL.absoluteString == "https://api.groq.com/openai/v1/chat/completions")
         #expect(store.saved == ["groq=gsk_first"])
     }
+
+    @Test func freshSetupDoesNotSaveEnvironmentProvider() throws {
+        let dir = try makeConfigDir(config: nil)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = FakeKeyStore()
+
+        try makeDraft(dir, .openAI, key: "sk-first", env: ["FIXIT_PROVIDER": "openai"], store: store).save()
+
+        let saved = try #require(ConfigStore.loadExistingConfig(from: dir))
+        #expect(saved.provider == nil)
+        #expect(store.saved == ["openai=sk-first"])
+    }
+
+    @Test(arguments: [
+        #"{"provider": "bogus", "model": "my-model", "styles": []}"#,
+        #"{"model": "my-model", "styles": []}"#,
+    ])
+    func unknownOrMissingStoredProviderIsReplacedWhenSwitching(config: String) throws {
+        let dir = try makeConfigDir(config: config)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = FakeKeyStore()
+
+        try makeDraft(dir, .openAI, key: "sk-new", store: store).save()
+
+        let saved = try #require(ConfigStore.loadExistingConfig(from: dir))
+        #expect(saved.provider == "openai")
+        #expect(saved.model == nil)
+        #expect(try savedRuntime(dir).provider == .openAI)
+    }
+
+    @Test func missingStoredProviderCountsAsGroq() throws {
+        let dir = try makeConfigDir(config: #"{"model": "my-model", "styles": []}"#)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = FakeKeyStore()
+
+        try makeDraft(dir, .groq, key: "gsk_new", store: store).save()
+
+        let saved = try #require(ConfigStore.loadExistingConfig(from: dir))
+        #expect(saved.provider == nil)
+        #expect(saved.model == "my-model")
+    }
 }
