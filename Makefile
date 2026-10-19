@@ -36,7 +36,7 @@ test:
 	else \
 		swift test; \
 	fi
-	# Launch the real source binary so a missing Sparkle runpath fails the check.
+	@# Launch the real source binary so a missing Sparkle runpath fails the check.
 	swift run Fixit cli version
 
 deploy: build

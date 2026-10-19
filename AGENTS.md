@@ -13,7 +13,7 @@
 | CLI smoke test | `swift run Fixit cli fix --style native --text "lets create a new project on this folder"` |
 | Build signed app bundle (release shape) | `./scripts/build-app.sh` |
 | Build/install local dev app (`FixitDev.app`, own bundle id + config dir) | `make deploy` |
-| Run tests | `make test` (wraps `swift test`; fixes Testing.framework paths on CLT-only machines) |
+| Run tests | `make test` (wraps `swift test`, fixing Testing.framework paths on CLT-only machines, then smoke-runs `swift run Fixit cli version`) |
 
 ## File-Scoped Commands
 | Task | Command |
