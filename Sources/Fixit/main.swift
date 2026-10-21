@@ -1101,7 +1101,9 @@ struct TextTargetSession {
     var replacesSelection = true
     // Auto-fix with nothing selected: select the whole field before pasting.
     var replacesWholeField = false
-    // Auto-fix only: the focused field at capture, compared again before writing.
+    // Auto-fix only: the focused field at capture, which must still have focus when writing.
+    var targetElement: AXUIElement?
+    // Auto-fix only, when the field's text was read: written to directly and compared again before writing.
     var focusedElement: AXUIElement?
     var fieldSnapshot: FieldSnapshot?
 }
@@ -1261,11 +1263,13 @@ enum TextSelectionIO {
         case .notEditable:
             throw FixitError.notEditable
         case .unknown:
-            let session = try await captureBySelectingAll()
+            var session = try await captureBySelectingAll()
             // Put the caret back so the field doesn't sit selected while the request runs.
             if let selection = snapshot.selection {
                 select(CFRange(location: selection.location, length: 0), in: element)
             }
+            // Its value can't be trusted (it leaves out inline images), so it's only checked for focus.
+            session.targetElement = element
             return session
         case .selection:
             session = try await captureSelection()
@@ -1273,6 +1277,7 @@ enum TextSelectionIO {
             guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw FixitError.noSelection }
             session = TextTargetSession(originalText: value, sourceApp: app, replacesWholeField: true)
         }
+        session.targetElement = element
         session.focusedElement = element
         session.fieldSnapshot = snapshot
         return session
@@ -1281,11 +1286,14 @@ enum TextSelectionIO {
     /// False when focus moved or the field changed since capture, so writing would clobber something else.
     @MainActor
     static func targetUnchanged(_ session: TextTargetSession) -> Bool {
-        guard let element = session.focusedElement else { return true }
+        // Auto-fix never refocuses, so the keystrokes land in whatever app is in front.
         guard let app = session.sourceApp,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-              let current = focusedElement(of: app), CFEqual(current, element) else { return false }
-        guard let captured = session.fieldSnapshot else { return false }
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
+        if let element = session.targetElement {
+            guard let current = focusedElement(of: app), CFEqual(current, element) else { return false }
+        }
+        // Fallback captures have no readable text to compare.
+        guard let element = session.focusedElement, let captured = session.fieldSnapshot else { return true }
         return fieldSnapshot(of: element).stillMatches(captured, replacingWholeField: session.replacesWholeField)
     }
 
