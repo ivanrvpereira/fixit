@@ -21,6 +21,7 @@
 
 - ⚡ **Works everywhere** — system-wide hotkeys fix selected text in any app: Slack, Mail, your browser, your editor. Nothing selected? Fixit falls back to your clipboard.
 - ✍️ **Three built-in styles** — sound native (`⌘⇧1`), proofread (`⌘⇧2`), or make professional (`⌘⇧3`), plus a style picker on `⌘⇧0`.
+- 🪄 **Auto-fix in place (opt-in)** — set an Auto-fix shortcut in Settings and it fixes the text field you're typing in, with no selection and no review step. If text is selected, it fixes just that.
 - 🎛️ **Fully customizable** — every style is just a Markdown prompt and a shortcut. Edit, rename, add, or remove styles right in Settings.
 - 📡 **Streaming with cancel** — watch the fix arrive token by token; press Esc to cancel mid-flight.
 - 🤖 **Bring your own model** — pick a provider: [OpenRouter](https://openrouter.ai), [OpenAI](https://platform.openai.com), [Groq](https://console.groq.com), [Gemini](https://aistudio.google.com), [Mistral](https://console.mistral.ai), [Cerebras](https://cloud.cerebras.ai), local [Ollama](https://ollama.com), or any OpenAI-compatible endpoint. No subscription, no middleman server. Free tiers cover casual use, and local Ollama needs no account at all.

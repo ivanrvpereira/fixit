@@ -137,6 +137,10 @@ struct FixitConfig: Codable {
     let styles: [StyleConfig]?
     let pickerShortcutKey: String?
     let pickerShortcutModifiers: [String]?
+    let autoFixShortcutKey: String?
+    let autoFixShortcutModifiers: [String]?
+    let autoFixStyle: String?
+    let replaceWithoutClipboard: Bool?
     let provider: String?
     let model: String?
     let endpoint: String?
@@ -152,6 +156,10 @@ struct FixitConfig: Codable {
         styles: [StyleConfig]? = nil,
         pickerShortcutKey: String? = nil,
         pickerShortcutModifiers: [String]? = nil,
+        autoFixShortcutKey: String? = nil,
+        autoFixShortcutModifiers: [String]? = nil,
+        autoFixStyle: String? = nil,
+        replaceWithoutClipboard: Bool? = nil,
         provider: String? = nil,
         model: String? = nil,
         endpoint: String? = nil,
@@ -165,6 +173,10 @@ struct FixitConfig: Codable {
         self.styles = styles
         self.pickerShortcutKey = pickerShortcutKey
         self.pickerShortcutModifiers = pickerShortcutModifiers
+        self.autoFixShortcutKey = autoFixShortcutKey
+        self.autoFixShortcutModifiers = autoFixShortcutModifiers
+        self.autoFixStyle = autoFixStyle
+        self.replaceWithoutClipboard = replaceWithoutClipboard
         self.provider = provider
         self.model = model
         self.endpoint = endpoint
@@ -182,6 +194,12 @@ struct RuntimeConfig {
     let styles: [StyleConfig]
     let pickerKey: String?
     let pickerModifiers: [String]?
+    // Opt-in: no key means no auto-fix hotkey.
+    let autoFixKey: String?
+    let autoFixModifiers: [String]?
+    let autoFixStyleID: String?
+    // Experimental: auto-fix writes through Accessibility instead of select-all + paste.
+    let replaceWithoutClipboard: Bool
     let provider: Provider
     let model: String
     let baseURL: URL
@@ -252,6 +270,10 @@ struct RuntimeConfig {
             styles: config.styles ?? RuntimeConfig.defaultStyles,
             pickerKey: config.pickerShortcutKey,
             pickerModifiers: config.pickerShortcutModifiers,
+            autoFixKey: config.autoFixShortcutKey,
+            autoFixModifiers: config.autoFixShortcutModifiers,
+            autoFixStyleID: config.autoFixStyle,
+            replaceWithoutClipboard: config.replaceWithoutClipboard ?? false,
             provider: provider,
             model: model,
             baseURL: baseURL,
@@ -282,6 +304,10 @@ struct RuntimeConfig {
             styles: defaultStyles,
             pickerKey: nil,
             pickerModifiers: nil,
+            autoFixKey: nil,
+            autoFixModifiers: nil,
+            autoFixStyleID: nil,
+            replaceWithoutClipboard: false,
             provider: provider,
             model: provider.defaultModel,
             baseURL: provider.defaultEndpoint.flatMap(URL.init(string:)) ?? URL(fileURLWithPath: "/"),
@@ -289,6 +315,11 @@ struct RuntimeConfig {
             appTitle: "Fixit",
             apiKeyEnv: nil
         )
+    }
+
+    /// The style with `id`, else "native", else the first style.
+    static func resolveStyle(id: String?, styles: [StyleConfig]) -> StyleConfig {
+        styles.first(where: { $0.id == id }) ?? styles.first(where: { $0.id == "native" }) ?? styles.first ?? defaultStyles[0]
     }
 
     static let defaultStyles = [
@@ -303,6 +334,9 @@ enum FixitError: LocalizedError {
     case missingAPIKey(String)
     case invalidAPIKey(String)
     case noSelection
+    case notEditable
+    case secureField
+    case targetChanged
     case accessibilityRequired
     case api(String)
 
@@ -312,6 +346,9 @@ enum FixitError: LocalizedError {
         case .missingAPIKey(let provider): "\(provider) API key is missing. Add it in Fixit Settings."
         case .invalidAPIKey(let message): "API key is invalid. Add a valid key in Fixit Settings. \(message)"
         case .noSelection: "No text to fix. Select text (or copy it to the clipboard) and try again."
+        case .notEditable: "Click into a text field first."
+        case .secureField: "Fixit won't read password fields."
+        case .targetChanged: "Text changed while fixing; nothing was replaced."
         case .accessibilityRequired: "Accessibility permission required. Open System Settings → Privacy & Security → Accessibility."
         case .api(let message): message
         }
@@ -738,7 +775,8 @@ struct CLIParser {
 }
 
 enum ConfigStore {
-    static func save(config: RuntimeConfig, styles: [StyleConfig], pickerKey: String?, pickerModifiers: [String]?, prompts: [String: String], provider: Provider, model: String?, endpoint: String?) throws {
+    // Auto-fix stays off without a key; its modifiers and style are only written with one.
+    static func save(config: RuntimeConfig, styles: [StyleConfig], pickerKey: String?, pickerModifiers: [String]?, autoFixKey: String?, autoFixModifiers: [String]?, autoFixStyle: String?, replaceWithoutClipboard: Bool, prompts: [String: String], provider: Provider, model: String?, endpoint: String?) throws {
         try FileManager.default.createDirectory(at: config.configDir, withIntermediateDirectories: true)
         for (relativePath, prompt) in prompts {
             let url = config.configDir.appendingPathComponent(relativePath)
@@ -752,6 +790,11 @@ enum ConfigStore {
             styles: styles,
             pickerShortcutKey: pickerKey,
             pickerShortcutModifiers: pickerModifiers,
+            autoFixShortcutKey: autoFixKey,
+            autoFixShortcutModifiers: autoFixKey == nil ? nil : autoFixModifiers,
+            autoFixStyle: autoFixKey == nil ? nil : autoFixStyle,
+            // Written only when on, so configs that never use it stay as they were.
+            replaceWithoutClipboard: replaceWithoutClipboard ? true : nil,
             provider: provider.rawValue,
             model: model,
             // Keep a hand-edited endpoint override when the provider didn't change.
@@ -836,6 +879,10 @@ struct SetupDraft {
             styles: existing.styles,
             pickerShortcutKey: existing.pickerShortcutKey,
             pickerShortcutModifiers: existing.pickerShortcutModifiers,
+            autoFixShortcutKey: existing.autoFixShortcutKey,
+            autoFixShortcutModifiers: existing.autoFixShortcutModifiers,
+            autoFixStyle: existing.autoFixStyle,
+            replaceWithoutClipboard: existing.replaceWithoutClipboard,
             provider: keepsProvider ? existing.provider : provider.rawValue,
             model: keepsProvider ? existing.model : nil,
             endpoint: keepsProvider ? existing.endpoint : nil,
@@ -1062,6 +1109,105 @@ struct TextTargetSession {
     let sourceApp: NSRunningApplication?
     // False when the text came from the clipboard: accepting copies instead of pasting.
     var replacesSelection = true
+    // Auto-fix with nothing selected: select the whole field before pasting.
+    var replacesWholeField = false
+    // Auto-fix only: the focused field at capture, compared again before writing.
+    var focusedElement: AXUIElement?
+    var fieldSnapshot: FieldSnapshot?
+}
+
+struct FieldSnapshot: Equatable {
+    let value: String?
+    let selection: NSRange?
+
+    /// Whether a fix captured as `captured` can still be written. A whole-field fix replaces all the
+    /// text and puts the caret back itself, so only the text has to match; apps such as Messages move
+    /// the caret on their own. A selection fix also needs the same selection, or it would paste over
+    /// something else.
+    func stillMatches(_ captured: FieldSnapshot, replacingWholeField: Bool) -> Bool {
+        replacingWholeField ? value == captured.value : self == captured
+    }
+}
+
+/// What the auto-fix hotkey acts on, decided from the focused element's accessibility attributes.
+enum AutoFixTarget: Equatable {
+    case selection
+    case field(String)
+    case secure
+    case notEditable
+    // Editable, but the app doesn't expose all of its text; fall back to select-all and copy.
+    case unknown
+
+    static let textRoles: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole]
+
+    // Terminals expose their whole scrollback as one text area; auto-fix must never send or paste that.
+    static let terminalBundleIDs: Set<String> = [
+        "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "com.github.wez.wezterm",
+        "net.kovidgoyal.kitty", "org.alacritty", "dev.warp.Warp-Stable", "co.zeit.hyper",
+    ]
+
+    // `hasInlineImages`: rich editors like Slack's draw emoji as images and leave them out of the value,
+    // so fixing that value would delete them.
+    static func decide(role: String?, subrole: String?, valueSettable: Bool, selectedLength: Int?, value: String?, hasInlineImages: Bool) -> AutoFixTarget {
+        if subrole == kAXSecureTextFieldSubrole { return .secure }
+        guard let role, textRoles.contains(role) || valueSettable else { return .notEditable }
+        if let selectedLength, selectedLength > 0 { return .selection }
+        guard let value, !hasInlineImages else { return .unknown }
+        return .field(value)
+    }
+}
+
+/// Carries a caret position across an edit by anchoring it to the unchanged characters around it.
+enum CaretMapper {
+    /// Where a caret at UTF-16 `offset` in `original` belongs in `fixed` (also a UTF-16 offset, as Accessibility uses).
+    static func map(utf16Offset offset: Int, from original: String, to fixed: String) -> Int {
+        let old = Array(original)
+        let new = Array(fixed)
+        let caretIndex = String.Index(utf16Offset: min(max(offset, 0), original.utf16.count), in: original)
+        let caret = original.distance(from: original.startIndex, to: caretIndex)
+        let mapped: Int
+        if caret == 0 {
+            mapped = 0
+        } else if caret >= old.count {
+            mapped = new.count
+        } else {
+            let matches = matchedIndices(old: old, new: new)
+            if let index = matches[caret] {
+                // Before the same unchanged character.
+                mapped = index
+            } else if let index = matches[caret - 1] {
+                // After the same unchanged character.
+                mapped = index + 1
+            } else {
+                // Inside rewritten text: after the rewrite, before the next unchanged character.
+                mapped = (caret..<old.count).lazy.compactMap { matches[$0] }.first ?? new.count
+            }
+        }
+        return String(new[..<mapped]).utf16.count
+    }
+
+    private static func matchedIndices(old: [Character], new: [Character]) -> [Int: Int] {
+        var removed = Set<Int>()
+        var inserted = Set<Int>()
+        for change in new.difference(from: old) {
+            switch change {
+            case .remove(let offset, _, _): removed.insert(offset)
+            case .insert(let offset, _, _): inserted.insert(offset)
+            }
+        }
+        let keptOld = old.indices.filter { !removed.contains($0) }
+        let keptNew = new.indices.filter { !inserted.contains($0) }
+        return Dictionary(uniqueKeysWithValues: zip(keptOld, keptNew))
+    }
+}
+
+extension String {
+    /// This text wrapped in `original`'s leading and trailing whitespace, which the client trims off results.
+    func withOuterWhitespace(of original: String) -> String {
+        let leading = original.prefix(while: \.isWhitespace)
+        let trailing = original.reversed().prefix(while: \.isWhitespace).reversed()
+        return String(leading) + trimmingCharacters(in: .whitespacesAndNewlines) + String(trailing)
+    }
 }
 
 enum TextSelectionIO {
@@ -1078,6 +1224,8 @@ enum TextSelectionIO {
         let sourceApp = NSWorkspace.shared.frontmostApplication
         let pasteboard = NSPasteboard.general
         let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+        // Deferred so a cancelled wait still gives the user their clipboard back.
+        defer { snapshot.restore(to: pasteboard) }
         // clearContents() bumps the change count, so the baseline must come from its return value.
         let clearedChangeCount = pasteboard.clearContents()
         simulateKey(virtualKey: CGKeyCode(kVK_ANSI_C), flags: .maskCommand)
@@ -1090,24 +1238,311 @@ enum TextSelectionIO {
                 if !text.isEmpty { break }
             }
         }
-        snapshot.restore(to: pasteboard)
 
         let trimmedForCheck = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedForCheck.isEmpty else { throw FixitError.noSelection }
         return TextTargetSession(originalText: text, sourceApp: sourceApp)
     }
 
+    /// The selection if there is one, otherwise all the text in the focused field.
     @MainActor
-    static func replaceSelectedText(with text: String, in session: TextTargetSession) async throws {
+    static func captureForAutoFix() async throws -> TextTargetSession {
         try ensureAccessibility()
-        session.sourceApp?.activate()
-        try await Task.sleep(nanoseconds: 300_000_000)
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            throw FixitError.notEditable
+        }
+        guard let element = focusedElement(of: app) else {
+            return try await captureBySelectingAll()
+        }
+        let snapshot = fieldSnapshot(of: element)
+        let target = AutoFixTarget.decide(
+            role: attribute(element, kAXRoleAttribute) as? String,
+            subrole: attribute(element, kAXSubroleAttribute) as? String,
+            valueSettable: isSettable(element, kAXValueAttribute),
+            selectedLength: snapshot.selection?.length,
+            value: snapshot.value,
+            hasInlineImages: containsImage(element)
+        )
+        var session: TextTargetSession
+        switch target {
+        case .secure:
+            throw FixitError.secureField
+        case .notEditable:
+            throw FixitError.notEditable
+        case .unknown:
+            let session = try await captureBySelectingAll()
+            // Put the caret back so the field doesn't sit selected while the request runs.
+            if let selection = snapshot.selection {
+                select(CFRange(location: selection.location, length: 0), in: element)
+            }
+            return session
+        case .selection:
+            session = try await captureSelection()
+        case .field(let value):
+            guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw FixitError.noSelection }
+            session = TextTargetSession(originalText: value, sourceApp: app, replacesWholeField: true)
+        }
+        session.focusedElement = element
+        session.fieldSnapshot = snapshot
+        return session
+    }
 
+    /// False when focus moved or the field changed since capture, so writing would clobber something else.
+    @MainActor
+    static func targetUnchanged(_ session: TextTargetSession) -> Bool {
+        guard let element = session.focusedElement else { return true }
+        guard let app = session.sourceApp,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+              let current = focusedElement(of: app), CFEqual(current, element) else { return false }
+        guard let captured = session.fieldSnapshot else { return false }
+        return fieldSnapshot(of: element).stillMatches(captured, replacingWholeField: session.replacesWholeField)
+    }
+
+    /// Where the pill should point in the frontmost app's focused field: centered under the caret (or
+    /// selection) when the app can say where it is, else left-aligned under the field. `source` names the
+    /// method that worked, for the debug log. Nil when there's no focused element.
+    @MainActor
+    static func caretAnchor() -> (anchor: CursorPill.Anchor, source: String)? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let element = focusedElement(of: app),
+              let primary = NSScreen.screens.first else { return nil }
+        // Accessibility measures from the top of the primary screen; AppKit from its bottom.
+        func appKit(_ rect: CGRect) -> NSRect {
+            NSRect(x: rect.minX, y: primary.frame.maxY - rect.maxY, width: rect.width, height: rect.height)
+        }
+        let snapshot = fieldSnapshot(of: element)
+        if let selection = snapshot.selection {
+            if selection.length > 0,
+               let rect = textRect(bounds(of: CFRange(location: selection.location, length: selection.length), in: element)) {
+                return (CursorPill.Anchor(rect: appKit(rect)), "selection")
+            }
+            if let rect = glyphCaretRect(in: element, at: selection.location + selection.length, text: snapshot.value) {
+                return (CursorPill.Anchor(rect: appKit(rect)), "glyph")
+            }
+        }
+        let marker = markerCaretRect(in: element)
+        if let rect = marker.rect {
+            return (CursorPill.Anchor(rect: appKit(rect)), "text marker: \(marker.note)")
+        }
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        guard let position = attribute(element, kAXPositionAttribute), CFGetTypeID(position) == AXValueGetTypeID(),
+              let extent = attribute(element, kAXSizeAttribute), CFGetTypeID(extent) == AXValueGetTypeID(),
+              AXValueGetValue(position as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(extent as! AXValue, .cgSize, &size) else { return nil }
+        return (CursorPill.Anchor(rect: appKit(CGRect(origin: origin, size: size)), leading: true), "field (\(marker.note))")
+    }
+
+    /// The caret at UTF-16 `location` as a zero-width rect, measured from the character after it, else the one
+    /// before it. A zero-length range is the last resort: AppKit reports it a line too high.
+    private static func glyphCaretRect(in element: AXUIElement, at location: Int, text: String?) -> CGRect? {
+        if let after = textRect(bounds(of: CFRange(location: location, length: 1), in: element)) {
+            return CGRect(x: after.minX, y: after.minY, width: 0, height: after.height)
+        }
+        // After a newline the character before sits at the end of the previous line, not by the caret.
+        let previous = text.flatMap { text in
+            location > 0 && location <= text.utf16.count ? text.utf16[text.utf16.index(text.utf16.startIndex, offsetBy: location - 1)] : nil
+        }
+        if location > 0, previous != 0x0A, previous != 0x0D,
+           let before = textRect(bounds(of: CFRange(location: location - 1, length: 1), in: element)) {
+            return CGRect(x: before.maxX, y: before.minY, width: 0, height: before.height)
+        }
+        return textRect(bounds(of: CFRange(location: location, length: 0), in: element))
+    }
+
+    /// Chromium and WebKit (Electron apps, browsers) measure text only on the static-text nodes inside a
+    /// field, and report the caret itself as its whole line. Text markers say which node holds the caret and
+    /// how far into it; measure there. `note` says which route worked, or where it stopped, for the debug log.
+    private static func markerCaretRect(in field: AXUIElement) -> (rect: CGRect?, note: String) {
+        guard let selection = attribute(field, "AXSelectedTextMarkerRange"),
+              CFGetTypeID(selection) == AXTextMarkerRangeGetTypeID() else { return (nil, "no text markers") }
+        let caret = AXTextMarkerRangeCopyEndMarker(selection as! AXTextMarkerRange)
+        if let nodeValue = parameterizedAttribute(field, "AXUIElementForTextMarker", caret),
+           CFGetTypeID(nodeValue) == AXUIElementGetTypeID() {
+            let node = nodeValue as! AXUIElement
+            if !CFEqual(node, field),
+               let nodeStart = startMarker(of: node, in: field),
+               let offset = textLength(from: nodeStart, to: caret, in: field),
+               let rect = glyphCaretRect(in: node, at: offset, text: attribute(node, kAXValueAttribute) as? String) {
+                return (rect, "caret node")
+            }
+        }
+        // The caret belongs to the field itself: find the static-text node whose span holds it.
+        guard let fieldStart = startMarker(of: field, in: field),
+              let caretOffset = textLength(from: fieldStart, to: caret, in: field) else { return (nil, "no caret offset") }
+        for text in staticTexts(in: field) {
+            guard let textStart = startMarker(of: text, in: field),
+                  let start = textLength(from: fieldStart, to: textStart, in: field) else { continue }
+            let value = attribute(text, kAXValueAttribute) as? String
+            guard caretOffset >= start, caretOffset <= start + (value?.utf16.count ?? 0) else { continue }
+            if let rect = glyphCaretRect(in: text, at: caretOffset - start, text: value) {
+                return (rect, "static text")
+            }
+        }
+        return (nil, "no static text measured the caret")
+    }
+
+    private static func startMarker(of element: AXUIElement, in field: AXUIElement) -> AXTextMarker? {
+        guard let range = parameterizedAttribute(field, "AXTextMarkerRangeForUIElement", element),
+              CFGetTypeID(range) == AXTextMarkerRangeGetTypeID() else { return nil }
+        return AXTextMarkerRangeCopyStartMarker(range as! AXTextMarkerRange)
+    }
+
+    // UTF-16 length of the text between two markers, matching AXValue offsets.
+    private static func textLength(from start: AXTextMarker, to end: AXTextMarker, in field: AXUIElement) -> Int? {
+        parameterizedAttribute(field, "AXLengthForTextMarkerRange", AXTextMarkerRangeCreate(kCFAllocatorDefault, start, end)) as? Int
+    }
+
+    // Budgeted like containsImage; order doesn't matter, the caller matches spans by offset.
+    private static func staticTexts(in element: AXUIElement) -> [AXUIElement] {
+        var found: [AXUIElement] = []
+        var pending = [element]
+        var visited = 0
+        while let node = pending.popLast(), visited < 500 {
+            visited += 1
+            if attribute(node, kAXRoleAttribute) as? String == kAXStaticTextRole {
+                found.append(node)
+            } else {
+                pending += attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []
+            }
+        }
+        return found
+    }
+
+    // A rect that can be text: real height, and no taller than a few lines (whole-element rects aren't).
+    private static func textRect(_ rect: CGRect) -> CGRect? {
+        rect.isNull || rect.height <= 0 || rect.height >= 200 ? nil : rect
+    }
+
+    private static func parameterizedAttribute(_ element: AXUIElement, _ name: String, _ parameter: CFTypeRef) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, name as CFString, parameter, &value) == .success else { return nil }
+        return value
+    }
+
+    // On-screen bounds of a text range in Accessibility coordinates; null when the app can't say.
+    private static func bounds(of range: CFRange, in element: AXUIElement) -> CGRect {
+        var range = range
+        var rect = CGRect.null
+        var bounds: CFTypeRef?
+        guard let rangeValue = AXValueCreate(.cfRange, &range),
+              AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, rangeValue, &bounds) == .success,
+              let bounds, CFGetTypeID(bounds) == AXValueGetTypeID(),
+              AXValueGetValue(bounds as! AXValue, .cgRect, &rect) else { return .null }
+        return rect
+    }
+
+    // For apps that expose no text through accessibility.
+    @MainActor
+    private static func captureBySelectingAll() async throws -> TextTargetSession {
+        simulateKey(virtualKey: CGKeyCode(kVK_ANSI_A), flags: .maskCommand)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        var session = try await captureSelection()
+        session.replacesWholeField = true
+        return session
+    }
+
+    private static func focusedElement(of app: NSRunningApplication) -> AXUIElement? {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        // Electron apps only build their accessibility tree once an assistive app asks for it.
+        AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        guard let value = attribute(appElement, kAXFocusedUIElementAttribute),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
+    }
+
+    private static func fieldSnapshot(of element: AXUIElement) -> FieldSnapshot {
+        var selection: NSRange?
+        if let value = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(value) == AXValueGetTypeID() {
+            var range = CFRange()
+            if AXValueGetValue(value as! AXValue, .cfRange, &range) {
+                selection = NSRange(location: range.location, length: range.length)
+            }
+        }
+        return FieldSnapshot(value: attribute(element, kAXValueAttribute) as? String, selection: selection)
+    }
+
+    private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value
+    }
+
+    private static func isSettable(_ element: AXUIElement, _ name: String) -> Bool {
+        var settable: DarwinBoolean = false
+        return AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success && settable.boolValue
+    }
+
+    /// Writes the whole field straight into the focused element: no select-all flash, clipboard untouched.
+    /// False when the app rejects or ignores the write, so the caller can paste instead.
+    @MainActor
+    static func replaceDirectly(with text: String, in session: TextTargetSession) async -> Bool {
+        // A user's own selection has no flash to avoid, so it always pastes. Writing AXSelectedText is
+        // unreliable: Firefox deletes the selection without inserting, which passes the value-changed check.
+        guard session.replacesWholeField, let element = session.focusedElement else { return false }
+        guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString) == .success else { return false }
+        return await valueChanged(element, from: session.fieldSnapshot?.value)
+    }
+
+    /// Puts the caret back where it was in the field, carried over to the fixed text. Call only once the write
+    /// has landed: apps that apply it asynchronously reset the caret when they do.
+    @MainActor
+    static func restoreCaret(in session: TextTargetSession, fixedText: String) {
+        guard session.replacesWholeField, let element = session.focusedElement else { return }
+        let caret = session.fieldSnapshot?.selection?.location ?? session.originalText.utf16.count
+        select(CFRange(location: CaretMapper.map(utf16Offset: caret, from: session.originalText, to: fixedText), length: 0), in: element)
+    }
+
+    private static func select(_ range: CFRange, in element: AXUIElement) {
+        var range = range
+        if let value = AXValueCreate(.cfRange, &range) {
+            AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
+        }
+    }
+
+    // Budgeted so a long document can't stall the hotkey.
+    private static func containsImage(_ element: AXUIElement) -> Bool {
+        var pending = [element]
+        var visited = 0
+        while let node = pending.popLast(), visited < 500 {
+            visited += 1
+            if attribute(node, kAXRoleAttribute) as? String == kAXImageRole { return true }
+            pending += attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []
+        }
+        return false
+    }
+
+    // Browsers and Electron apps update their accessibility tree asynchronously; give the new value a moment to show.
+    // Without a readable value there's no way to tell; trust the write rather than paste a second copy.
+    @MainActor
+    private static func valueChanged(_ element: AXUIElement, from before: String?) async -> Bool {
+        guard let before else { return true }
+        for _ in 0..<6 {
+            if fieldSnapshot(of: element).value != before { return true }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return false
+    }
+
+    // `refocus` hands focus back to the source app first; auto-fix never takes it away.
+    @MainActor
+    static func replaceSelectedText(with text: String, in session: TextTargetSession, refocus: Bool = true) async throws {
+        try ensureAccessibility()
+        if refocus {
+            session.sourceApp?.activate()
+            try await Task.sleep(nanoseconds: 300_000_000)
+        }
         let pasteboard = NSPasteboard.general
         let snapshot = PasteboardSnapshot.capture(from: pasteboard)
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         try await Task.sleep(nanoseconds: 80_000_000)
+        // Select-all right before the paste so the selection never visibly flashes.
+        if session.replacesWholeField {
+            simulateKey(virtualKey: CGKeyCode(kVK_ANSI_A), flags: .maskCommand)
+        }
         simulateKey(virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
         try await Task.sleep(nanoseconds: 750_000_000)
         snapshot.restore(to: pasteboard)
@@ -1216,6 +1651,106 @@ enum InlineDiffBuilder {
             tokens.append(current)
         }
         return tokens
+    }
+}
+
+/// Small status pill next to the text cursor while auto-fix runs. Never takes focus or clicks, so
+/// typing carries on in the app underneath.
+final class CursorPill: NSPanel {
+    private let label = NSTextField(labelWithString: "")
+    private let background = NSVisualEffectView()
+    private var anchor: Anchor?
+    private var hideTask: Task<Void, Never>?
+
+    /// What the pill points at: the caret, centered under it, or a field whose caret is unknown,
+    /// left-aligned under its start.
+    struct Anchor: Equatable {
+        var rect: NSRect
+        var leading = false
+    }
+
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        level = .statusBar
+        isFloatingPanel = true
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+        ignoresMouseEvents = true
+        collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
+        background.material = .hudWindow
+        background.state = .active
+        background.wantsLayer = true
+        background.layer?.masksToBounds = true
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = .labelColor
+        background.addSubview(label)
+        contentView = background
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    /// Shows `text` next to `anchor` (or where it last was); `hideAfter` fades it out.
+    func show(_ text: String, at anchor: Anchor? = nil, hideAfter: TimeInterval? = nil) {
+        hideTask?.cancel()
+        if let anchor {
+            self.anchor = anchor
+        }
+        label.stringValue = text
+        let textSize = label.fittingSize
+        let size = NSSize(width: ceil(textSize.width) + 24, height: ceil(textSize.height) + 10)
+        label.frame = NSRect(x: 12, y: 5, width: ceil(textSize.width), height: ceil(textSize.height))
+        background.layer?.cornerRadius = size.height / 2
+        setFrame(NSRect(origin: origin(for: size), size: size), display: true)
+        // Through the animator, so it replaces a fade-out that is still running.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            animator().alphaValue = 1
+        }
+        orderFrontRegardless()
+        guard let hideAfter else { return }
+        hideTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(hideAfter * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                self.animator().alphaValue = 0
+            } completionHandler: {
+                Task { @MainActor in
+                    // A newer show() may have brought it back mid-fade.
+                    guard self.alphaValue == 0 else { return }
+                    self.orderOut(nil)
+                }
+            }
+        }
+    }
+
+    func hide() {
+        hideTask?.cancel()
+        orderOut(nil)
+    }
+
+    private func origin(for size: NSSize) -> NSPoint {
+        guard let anchor else {
+            // No caret to point at: top-center of the active screen.
+            let visible = NSScreen.main?.visibleFrame ?? .zero
+            return NSPoint(x: visible.midX - size.width / 2, y: visible.maxY - size.height - 12)
+        }
+        let screen = NSScreen.screens.first { $0.frame.intersects(anchor.rect) } ?? NSScreen.main
+        return Self.origin(for: size, anchor: anchor, visible: screen?.visibleFrame ?? anchor.rect)
+    }
+
+    /// Just below the anchor, flipping above it near the bottom of the screen, and kept on screen.
+    nonisolated static func origin(for size: NSSize, anchor: Anchor, visible: NSRect, gap: CGFloat = 6) -> NSPoint {
+        let rect = anchor.rect
+        var y = rect.minY - gap - size.height
+        if y < visible.minY {
+            y = rect.maxY + gap
+        }
+        let preferredX = anchor.leading ? rect.minX : rect.midX - size.width / 2
+        let x = min(max(preferredX, visible.minX), visible.maxX - size.width)
+        return NSPoint(x: x, y: min(max(y, visible.minY), visible.maxY - size.height))
     }
 }
 
@@ -1648,7 +2183,10 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private let modelField = NSTextField()
     private let endpointField = NSTextField()
     private let pickerShortcutField = NSTextField()
+    private let autoFixShortcutField = NSTextField()
+    private let autoFixStylePopup = NSPopUpButton()
     private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch Fixit at login", target: nil, action: nil)
+    private let replaceWithoutClipboardCheckbox = NSButton(checkboxWithTitle: "Auto-fix without the clipboard (experimental)", target: nil, action: nil)
 
     private let styleTable = NSTableView()
     private let addRemoveControl = NSSegmentedControl()
@@ -1692,9 +2230,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             providerPopup.selectItem(at: index)
         }
         rebuildStyleDrafts(config: config)
+        refreshAutoFixStyles(selecting: config.autoFixStyleID)
         applyProviderSelection(config.provider)
         pickerShortcutField.stringValue = ShortcutParser.display(key: config.pickerKey, modifiers: config.pickerModifiers)
+        autoFixShortcutField.stringValue = ShortcutParser.display(key: config.autoFixKey, modifiers: config.autoFixModifiers)
         launchAtLoginCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        replaceWithoutClipboardCheckbox.state = config.replaceWithoutClipboard ? .on : .off
         statusLabel.stringValue = "API keys, shortcuts, and prompts are stored in \(config.configDir.path)."
     }
 
@@ -1774,7 +2315,9 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         }
 
         pickerShortcutField.placeholderString = "cmd+shift+0"
-        for field in [apiKeyField, modelField, endpointField, pickerShortcutField, styleNameField, styleShortcutField] {
+        autoFixShortcutField.placeholderString = "Off"
+        autoFixShortcutField.toolTip = "Fixes the text field you're typing in (or the selected text) in place, with no review panel. Leave empty to turn it off."
+        for field in [apiKeyField, modelField, endpointField, pickerShortcutField, autoFixShortcutField, styleNameField, styleShortcutField] {
             field.setContentHuggingPriority(.defaultLow, for: .horizontal)
             field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
@@ -1794,6 +2337,9 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             [formLabel("Model:"), modelField],
             [formLabel("Endpoint:"), endpointField],
             [formLabel("Picker Shortcut:"), pickerShortcutField],
+            [formLabel("Auto-fix Shortcut:"), autoFixShortcutField],
+            [formLabel("Auto-fix Style:"), autoFixStylePopup],
+            [NSGridCell.emptyContentView, replaceWithoutClipboardCheckbox],
             [NSGridCell.emptyContentView, launchAtLoginCheckbox],
         ])
         formGrid.translatesAutoresizingMaskIntoConstraints = false
@@ -1803,7 +2349,10 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         formGrid.column(at: 0).xPlacement = .trailing
         formGrid.column(at: 1).xPlacement = .fill
         formGrid.cell(for: providerPopup)?.xPlacement = .leading
+        formGrid.cell(for: autoFixStylePopup)?.xPlacement = .leading
         formGrid.cell(for: launchAtLoginCheckbox)?.xPlacement = .leading
+        formGrid.cell(for: replaceWithoutClipboardCheckbox)?.xPlacement = .leading
+        replaceWithoutClipboardCheckbox.toolTip = "Writes the fix straight into the field, so the text never flashes selected. Some apps can't undo it or won't notice the change; Fixit pastes instead when a write is rejected."
 
 
         let separator = NSBox()
@@ -2020,6 +2569,29 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
               let row = styleDrafts.firstIndex(where: { $0 === draft }) else { return }
         draft.label = styleNameField.stringValue
         styleTable.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+        refreshAutoFixStyles(selecting: selectedAutoFixStyleID)
+    }
+
+    private var selectedAutoFixStyleID: String? {
+        autoFixStylePopup.selectedItem?.representedObject as? String
+    }
+
+    // Lists the drafts, so added, renamed and removed styles show before Save. A missing id selects the
+    // style auto-fix would fall back to.
+    private func refreshAutoFixStyles(selecting id: String?) {
+        autoFixStylePopup.removeAllItems()
+        for draft in styleDrafts {
+            let label = draft.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            // addItem(withTitle:) would merge styles that share a name.
+            let item = NSMenuItem(title: label.isEmpty ? "Style" : label, action: nil, keyEquivalent: "")
+            item.representedObject = draft.id
+            autoFixStylePopup.menu?.addItem(item)
+        }
+        let ids = styleDrafts.map(\.id)
+        let selected = ids.firstIndex(of: id ?? "") ?? ids.firstIndex(of: "native") ?? 0
+        if ids.indices.contains(selected) {
+            autoFixStylePopup.selectItem(at: selected)
+        }
     }
 
     @objc private func addRemovePressed(_ sender: NSSegmentedControl) {
@@ -2034,6 +2606,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         commitDetailFields()
         let id = StyleConfig.uniqueID(existing: styleDrafts.map(\.id))
         styleDrafts.append(StyleDraft(id: id, promptFile: "styles/\(id).md", label: "New Style", shortcut: "", prompt: ""))
+        refreshAutoFixStyles(selecting: selectedAutoFixStyleID)
         styleTable.reloadData()
         styleTable.selectRowIndexes(IndexSet(integer: styleDrafts.count - 1), byExtendingSelection: false)
         syncSelection()
@@ -2053,6 +2626,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         if displayedStyle === removed {
             displayedStyle = nil
         }
+        refreshAutoFixStyles(selecting: selectedAutoFixStyleID)
         styleTable.reloadData()
         styleTable.selectRowIndexes(IndexSet(integer: min(row, styleDrafts.count - 1)), byExtendingSelection: false)
         syncSelection()
@@ -2096,6 +2670,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
                 prompts[draft.promptFile] = draft.prompt
             }
             let pickerShortcut = try ShortcutParser.parse(pickerShortcutField.stringValue)
+            let autoFixShortcut = try ShortcutParser.parse(autoFixShortcutField.stringValue)
 
             if provider != .ollama {
                 try CredentialStore.saveAPIKey(apiKeyField.stringValue, provider: provider, configDir: currentConfig.configDir)
@@ -2105,6 +2680,10 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
                 styles: styles,
                 pickerKey: pickerShortcut.key,
                 pickerModifiers: pickerShortcut.modifiers,
+                autoFixKey: autoFixShortcut.key,
+                autoFixModifiers: autoFixShortcut.modifiers,
+                autoFixStyle: selectedAutoFixStyleID,
+                replaceWithoutClipboard: replaceWithoutClipboardCheckbox.state == .on,
                 prompts: prompts,
                 provider: provider,
                 model: model.isEmpty ? nil : model,
@@ -2365,6 +2944,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 final class HotKeyManager {
     // Style hotkey IDs are index + 1; keep the picker far above that range.
     private static let pickerHotKeyID = 1000
+    private static let autoFixHotKeyID = 1001
 
     private weak var app: AppController?
     private var eventHandlerRef: EventHandlerRef?
@@ -2375,7 +2955,7 @@ final class HotKeyManager {
         self.app = app
     }
 
-    func register(styles: [StyleConfig], pickerKey: String?, pickerModifiers: [String]?) {
+    func register(styles: [StyleConfig], pickerKey: String?, pickerModifiers: [String]?, autoFixKey: String?, autoFixModifiers: [String]?) {
         unregisterHotKeys()
         installEventHandlerIfNeeded()
 
@@ -2394,6 +2974,15 @@ final class HotKeyManager {
             let hotKeyID = EventHotKeyID(signature: OSType(0x46584954), id: UInt32(Self.pickerHotKeyID))
             var ref: EventHotKeyRef?
             let status = RegisterEventHotKey(keyCode, modifiers(for: pickerModifiers ?? []), hotKeyID, GetApplicationEventTarget(), 0, &ref)
+            if status == noErr, let ref {
+                registeredRefs.append(ref)
+            }
+        }
+
+        if let autoFixKey, let keyCode = keyCode(for: autoFixKey) {
+            let hotKeyID = EventHotKeyID(signature: OSType(0x46584954), id: UInt32(Self.autoFixHotKeyID))
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(keyCode, modifiers(for: autoFixModifiers ?? []), hotKeyID, GetApplicationEventTarget(), 0, &ref)
             if status == noErr, let ref {
                 registeredRefs.append(ref)
             }
@@ -2429,6 +3018,10 @@ final class HotKeyManager {
     @MainActor private func trigger(hotKeyID: Int) {
         if hotKeyID == Self.pickerHotKeyID {
             app?.showStylePicker()
+            return
+        }
+        if hotKeyID == Self.autoFixHotKeyID {
+            app?.autoFixFocusedField()
             return
         }
         guard let style = styleByHotKeyID[hotKeyID] else { return }
@@ -2604,6 +3197,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var client: OpenAICompatibleClient!
     private var overlay = OverlayPanel()
     private let stylePicker = StylePickerPanel()
+    private let pill = CursorPill()
     private var hotKeys: HotKeyManager?
     private var statusItem: NSStatusItem?
     private var settingsWindow: SettingsWindowController?
@@ -2611,6 +3205,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var updaterController: SPUStandardUpdaterController?
     private var isProcessing = false
     private var currentFixTask: Task<Void, Never>?
+    private var autoFixTask: Task<Void, Never>?
     private var lastTargetApp: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -2634,7 +3229,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         setupMenu()
         trackFrontmostApp()
         hotKeys = HotKeyManager(app: self)
-        hotKeys?.register(styles: config.styles, pickerKey: config.pickerKey, pickerModifiers: config.pickerModifiers)
+        hotKeys?.register(styles: config.styles, pickerKey: config.pickerKey, pickerModifiers: config.pickerModifiers, autoFixKey: config.autoFixKey, autoFixModifiers: config.autoFixModifiers)
         logger.log("App started", ["provider": config.provider.rawValue, "model": config.model, "styles": config.styles.map(\.id).joined(separator: ",")])
         if ProcessInfo.processInfo.environment["FIXIT_DEBUG_SETTINGS"] == "1" {
             showSettings()
@@ -2710,6 +3305,95 @@ final class AppController: NSObject, NSApplicationDelegate {
             }
             isProcessing = false
         }
+    }
+
+    // Fixes the focused field (or the selection) in place with the auto-fix style, no review panel;
+    // pressing the shortcut again cancels.
+    func autoFixFocusedField() {
+        if let autoFixTask {
+            autoFixTask.cancel()
+            return
+        }
+        guard !isProcessing else { return }
+        isProcessing = true
+        let style = RuntimeConfig.resolveStyle(id: config.autoFixStyleID, styles: config.styles)
+        logger.log("autofix start", ["styleId": style.id])
+        statusItem?.button?.title = "FX…"
+        autoFixTask = Task { @MainActor in
+            do {
+                switch try await runAutoFix(style: style) {
+                case .fixed: pill.show("✓ Fixed", hideAfter: 1.2)
+                case .unchanged: pill.show("✓ No changes needed", hideAfter: 1.2)
+                case .skipped: break
+                }
+            } catch is CancellationError {
+                logger.log("autofix cancelled")
+                showCancelledPill()
+            } catch let error as URLError where error.code == .cancelled {
+                logger.log("autofix cancelled")
+                showCancelledPill()
+            } catch FixitError.noSelection {
+                // An empty field has nothing to fix; a quick note instead of an error panel.
+                logger.log("autofix skipped", ["reason": "no text"])
+                pill.show("Nothing to fix", hideAfter: 1.2)
+            } catch FixitError.targetChanged {
+                // The text changed while the fix ran, usually because typing carried on. Writing would
+                // overwrite it, so drop the fix; pressing the shortcut again fixes the new text.
+                logger.log("autofix skipped", ["reason": "text changed"])
+                pill.show("Text changed, skipped", hideAfter: 1.6)
+            } catch {
+                pill.hide()
+                handleTriggerError(error)
+            }
+            statusItem?.button?.title = "FX"
+            autoFixTask = nil
+            isProcessing = false
+        }
+    }
+
+    // Only over a "Fixing…" pill already on screen: an early cancel has no caret position of its own.
+    private func showCancelledPill() {
+        guard pill.isVisible else { return }
+        pill.show("Cancelled", hideAfter: 1.0)
+    }
+
+    private enum AutoFixOutcome {
+        case fixed
+        case unchanged
+        // Terminals: no request, no feedback.
+        case skipped
+    }
+
+    private func runAutoFix(style: StyleConfig) async throws -> AutoFixOutcome {
+        if let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, AutoFixTarget.terminalBundleIDs.contains(app) {
+            logger.log("autofix skipped", ["app": app])
+            return .skipped
+        }
+        if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
+            throw FixitError.missingAPIKey(config.provider.label)
+        }
+        let pointer = TextSelectionIO.caretAnchor()
+        logger.log("pill anchor", ["source": pointer?.source ?? "none"])
+        pill.show("Fixing…", at: pointer?.anchor)
+        let session = try await TextSelectionIO.captureForAutoFix()
+        let started = Date()
+        let fixed = try await client.fix(text: session.originalText, systemPrompt: promptLoader.prompt(for: style))
+        try Task.checkCancellation()
+        let result = fixed.text.withOuterWhitespace(of: session.originalText)
+        logger.log("autofix complete", ["mode": session.replacesWholeField ? "field" : "selection", "accessibility": session.focusedElement != nil, "app": session.sourceApp?.bundleIdentifier ?? "", "durationMs": Int(Date().timeIntervalSince(started) * 1000), "inputLength": session.originalText.count, "outputLength": result.count, "cost": fixed.cost ?? 0])
+        guard result != session.originalText else { return .unchanged }
+        guard TextSelectionIO.targetUnchanged(session) else { throw FixitError.targetChanged }
+        if config.replaceWithoutClipboard, await TextSelectionIO.replaceDirectly(with: result, in: session) {
+            logger.log("autofix write", ["method": "direct"])
+        } else {
+            logger.log("autofix write", ["method": "paste"])
+            // Unstructured so a late cancel can't stop it between pasting and restoring the clipboard.
+            try await Task { @MainActor in
+                try await TextSelectionIO.replaceSelectedText(with: result, in: session, refocus: false)
+            }.value
+        }
+        TextSelectionIO.restoreCaret(in: session, fixedText: result)
+        return .fixed
     }
 
     // Nothing selected usually means the hotkey was pressed without a selection;
@@ -2837,7 +3521,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         logger = Logger(enabled: config.debugLogging, configDir: config.configDir)
         promptLoader = PromptLoader(config: config)
         client = OpenAICompatibleClient(config: config)
-        hotKeys?.register(styles: config.styles, pickerKey: config.pickerKey, pickerModifiers: config.pickerModifiers)
+        hotKeys?.register(styles: config.styles, pickerKey: config.pickerKey, pickerModifiers: config.pickerModifiers, autoFixKey: config.autoFixKey, autoFixModifiers: config.autoFixModifiers)
         settingsWindow?.reload(config: config)
     }
 
