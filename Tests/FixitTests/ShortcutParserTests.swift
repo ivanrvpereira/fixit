@@ -65,4 +65,27 @@ import Testing
         let flags = ShortcutParser.menuModifiers(for: ["OPT", "Cmd", "cmd"])
         #expect(flags == [.command, .option])
     }
+
+    @Test func validateRejectsAShortcutWithoutARealModifier() {
+        #expect(throws: FixitError.self) {
+            try ShortcutParser.validate([("Auto-fix", "f", [])])
+        }
+        #expect(throws: FixitError.self) {
+            try ShortcutParser.validate([("Auto-fix", "f", ["shift"])])
+        }
+    }
+
+    @Test func validateRejectsTwoShortcutsOnOneCombination() {
+        #expect(throws: FixitError.self) {
+            try ShortcutParser.validate([("Sound native", "1", ["command", "shift"]), ("Auto-fix", "1", ["shift", "cmd"])])
+        }
+    }
+
+    @Test func validateAcceptsDistinctShortcutsAndEmptyOnes() throws {
+        try ShortcutParser.validate([
+            ("Sound native", "1", ["command", "shift"]),
+            ("Picker", nil, nil),
+            ("Auto-fix", "1", ["option"]),
+        ])
+    }
 }
