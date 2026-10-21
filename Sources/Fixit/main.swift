@@ -1101,11 +1101,11 @@ struct TextTargetSession {
     var replacesSelection = true
     // Auto-fix with nothing selected: select the whole field before pasting.
     var replacesWholeField = false
-    // Auto-fix only: the focused field at capture, which must still have focus when writing.
+    // Auto-fix only: the focused field at capture and its state, checked again before writing.
     var targetElement: AXUIElement?
-    // Auto-fix only, when the field's text was read: written to directly and compared again before writing.
-    var focusedElement: AXUIElement?
     var fieldSnapshot: FieldSnapshot?
+    // Auto-fix only, when the field's text is all of its content: written to directly.
+    var focusedElement: AXUIElement?
 }
 
 struct FieldSnapshot: Equatable {
@@ -1268,8 +1268,9 @@ enum TextSelectionIO {
             if let selection = snapshot.selection {
                 select(CFRange(location: selection.location, length: 0), in: element)
             }
-            // Its value can't be trusted (it leaves out inline images), so it's only checked for focus.
+            // Its value leaves out inline images: compare it to catch edits, but never write it.
             session.targetElement = element
+            session.fieldSnapshot = snapshot
             return session
         case .selection:
             session = try await captureSelection()
@@ -1289,11 +1290,10 @@ enum TextSelectionIO {
         // Auto-fix never refocuses, so the keystrokes land in whatever app is in front.
         guard let app = session.sourceApp,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
-        if let element = session.targetElement {
-            guard let current = focusedElement(of: app), CFEqual(current, element) else { return false }
-        }
-        // Fallback captures have no readable text to compare.
-        guard let element = session.focusedElement, let captured = session.fieldSnapshot else { return true }
+        // Without a focused element at capture, the app is all there is to compare.
+        guard let element = session.targetElement else { return true }
+        guard let current = focusedElement(of: app), CFEqual(current, element),
+              let captured = session.fieldSnapshot else { return false }
         return fieldSnapshot(of: element).stillMatches(captured, replacingWholeField: session.replacesWholeField)
     }
 
@@ -1537,6 +1537,11 @@ enum TextSelectionIO {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         try await Task.sleep(nanoseconds: 80_000_000)
+        // Without a refocus the keys go to whatever is in front, and the wait above is long enough to switch.
+        if !refocus, !targetUnchanged(session) {
+            snapshot.restore(to: pasteboard)
+            throw FixitError.targetChanged
+        }
         // Select-all right before the paste so the selection never visibly flashes.
         if session.replacesWholeField {
             simulateKey(virtualKey: CGKeyCode(kVK_ANSI_A), flags: .maskCommand)
