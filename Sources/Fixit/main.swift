@@ -1192,6 +1192,16 @@ enum AutoFixTarget: Equatable {
         "net.kovidgoyal.kitty", "org.alacritty", "dev.warp.Warp-Stable", "co.zeit.hyper",
     ]
 
+    /// Whether a field holds nothing to fix. Some editors report their placeholder as the value: Signal's
+    /// empty composer reads "Message." Quill, which Signal and Slack use, marks an empty editor `ql-blank`.
+    static func isBlank(value: String?, placeholder: String?, classList: [String]) -> Bool {
+        if classList.contains("ql-blank") { return true }
+        guard let value else { return false }
+        let invisible = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{200B}\u{200C}\u{200D}\u{2060}\u{FEFF}"))
+        let trimmed = value.trimmingCharacters(in: invisible)
+        return trimmed.isEmpty || trimmed == placeholder?.trimmingCharacters(in: invisible)
+    }
+
     // `hasInlineImages`: rich editors like Slack's draw emoji as images and leave them out of the value,
     // so fixing that value would delete them.
     static func decide(role: String?, subrole: String?, valueSettable: Bool, selectedLength: Int?, value: String?, hasInlineImages: Bool) -> AutoFixTarget {
@@ -1303,6 +1313,14 @@ enum TextSelectionIO {
         guard let element = focusedElement(of: app) else { throw FixitError.notEditable }
         let snapshot = fieldSnapshot(of: element)
         let hasSelection = (snapshot.selection?.length ?? 0) > 0
+        // Checked first, so an empty field never reaches the model or the copy fallback.
+        if !hasSelection, AutoFixTarget.isBlank(
+            value: snapshot.value,
+            placeholder: attribute(element, "AXPlaceholderValue") as? String,
+            classList: attribute(element, "AXDOMClassList") as? [String] ?? []
+        ) {
+            throw FixitError.noSelection
+        }
         let target = AutoFixTarget.decide(
             role: attribute(element, kAXRoleAttribute) as? String,
             subrole: attribute(element, kAXSubroleAttribute) as? String,
