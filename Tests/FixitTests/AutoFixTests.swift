@@ -127,10 +127,10 @@ import Testing
             referer: nil, appTitle: "Fixit", apiKeyEnv: nil)
     }
 
-    private func save(autoFixKey: String? = nil, replaceWithoutClipboard: Bool = false) throws -> String {
+    private func save(autoFixKey: String? = nil, autoFixStyle: String = "native", replaceWithoutClipboard: Bool = false) throws -> String {
         try ConfigStore.save(
             config: config, styles: RuntimeConfig.defaultStyles, pickerKey: "0", pickerModifiers: ["command", "shift"],
-            autoFixKey: autoFixKey, autoFixModifiers: ["command", "shift"], autoFixStyle: "proofread",
+            autoFixKey: autoFixKey, autoFixModifiers: ["command", "shift"], autoFixStyle: autoFixStyle,
             replaceWithoutClipboard: replaceWithoutClipboard, prompts: [:], provider: .groq, model: nil, endpoint: nil)
         return try String(contentsOf: configDir.appendingPathComponent("config.json"), encoding: .utf8)
     }
@@ -145,12 +145,20 @@ import Testing
 
     @Test func savesAutoFixWhenSet() throws {
         defer { try? FileManager.default.removeItem(at: configDir) }
-        let saved = try JSONDecoder().decode(FixitConfig.self, from: Data(save(autoFixKey: "9", replaceWithoutClipboard: true).utf8))
+        let saved = try JSONDecoder().decode(FixitConfig.self, from: Data(save(autoFixKey: "9", autoFixStyle: "proofread", replaceWithoutClipboard: true).utf8))
         #expect(saved.autoFixShortcutKey == "9")
         #expect(saved.autoFixShortcutModifiers == ["command", "shift"])
         #expect(saved.autoFixStyle == "proofread")
         #expect(saved.replaceWithoutClipboard == true)
         #expect(saved.pickerShortcutKey == "0")
+    }
+
+    @Test func keepsAPickedStyleWithoutAKey() throws {
+        defer { try? FileManager.default.removeItem(at: configDir) }
+        let saved = try JSONDecoder().decode(FixitConfig.self, from: Data(save(autoFixStyle: "proofread").utf8))
+        #expect(saved.autoFixStyle == "proofread")
+        #expect(saved.autoFixShortcutKey == nil)
+        #expect(saved.autoFixShortcutModifiers == nil)
     }
 
     @Test func turningExperimentalOptionOffRemovesIt() throws {
@@ -161,7 +169,7 @@ import Testing
 
     @Test func checkSetupKeepsAutoFixSettings() throws {
         defer { try? FileManager.default.removeItem(at: configDir) }
-        _ = try save(autoFixKey: "9", replaceWithoutClipboard: true)
+        _ = try save(autoFixKey: "9", autoFixStyle: "proofread", replaceWithoutClipboard: true)
         try SetupDraft(configDir: configDir, provider: .groq, apiKey: "", env: [:], saveAPIKey: { _, _, _ in }).save()
         let saved = try #require(ConfigStore.loadExistingConfig(from: configDir))
         #expect(saved.autoFixShortcutKey == "9")

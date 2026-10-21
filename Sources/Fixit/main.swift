@@ -238,7 +238,7 @@ struct RuntimeConfig {
             }
             provider = parsed
         } else {
-            provider = .groq
+            provider = defaultProvider
         }
 
         let endpointOverride = env["FIXIT_ENDPOINT"] ?? config.endpoint
@@ -297,7 +297,7 @@ struct RuntimeConfig {
 
     /// Last-resort defaults so the menu bar and Settings stay reachable when config.json cannot be loaded.
     static func fallback() -> RuntimeConfig {
-        let provider = Provider.groq
+        let provider = defaultProvider
         return RuntimeConfig(
             configDir: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/fixit"),
             debugLogging: false,
@@ -316,6 +316,9 @@ struct RuntimeConfig {
             apiKeyEnv: nil
         )
     }
+
+    /// Used when neither FIXIT_PROVIDER nor config.json names one.
+    static let defaultProvider = Provider.groq
 
     /// The style with `id`, else "native", else the first style.
     static func resolveStyle(id: String?, styles: [StyleConfig]) -> StyleConfig {
@@ -690,6 +693,23 @@ struct ShortcutParser {
         return (key, normalizedModifiers(modifiers))
     }
 
+    /// Rejects a shortcut without cmd, option, or control (it would take over that key in every app) and
+    /// two shortcuts on the same combination (only one could register). `name` labels each in the message.
+    static func validate(_ shortcuts: [(name: String, key: String?, modifiers: [String]?)]) throws {
+        var owners: [String: String] = [:]
+        for shortcut in shortcuts {
+            guard let key = shortcut.key else { continue }
+            guard normalizedModifiers(shortcut.modifiers).contains(where: { $0 != "shift" }) else {
+                throw FixitError.configuration("The \(shortcut.name) shortcut needs cmd, option, or control, like cmd+shift+\(key).")
+            }
+            let combination = display(key: key, modifiers: shortcut.modifiers)
+            if let owner = owners[combination] {
+                throw FixitError.configuration("\(owner) and \(shortcut.name) both use \(combination).")
+            }
+            owners[combination] = shortcut.name
+        }
+    }
+
     private static func isSupportedKey(_ key: String) -> Bool {
         key.count == 1 && key.range(of: "^[a-z0-9]$", options: .regularExpression) != nil
     }
@@ -775,7 +795,8 @@ struct CLIParser {
 }
 
 enum ConfigStore {
-    // Auto-fix stays off without a key; its modifiers and style are only written with one.
+    // Auto-fix stays off without a key, and its modifiers are only written with one. Its style is also
+    // written when picked away from the default, so the choice survives until a key is set.
     static func save(config: RuntimeConfig, styles: [StyleConfig], pickerKey: String?, pickerModifiers: [String]?, autoFixKey: String?, autoFixModifiers: [String]?, autoFixStyle: String?, replaceWithoutClipboard: Bool, prompts: [String: String], provider: Provider, model: String?, endpoint: String?) throws {
         try FileManager.default.createDirectory(at: config.configDir, withIntermediateDirectories: true)
         for (relativePath, prompt) in prompts {
@@ -792,7 +813,7 @@ enum ConfigStore {
             pickerShortcutModifiers: pickerModifiers,
             autoFixShortcutKey: autoFixKey,
             autoFixShortcutModifiers: autoFixKey == nil ? nil : autoFixModifiers,
-            autoFixStyle: autoFixKey == nil ? nil : autoFixStyle,
+            autoFixStyle: autoFixKey != nil || autoFixStyle != RuntimeConfig.resolveStyle(id: nil, styles: styles).id ? autoFixStyle : nil,
             // Written only when on, so configs that never use it stay as they were.
             replaceWithoutClipboard: replaceWithoutClipboard ? true : nil,
             provider: provider.rawValue,
@@ -871,7 +892,7 @@ struct SetupDraft {
                 provider: provider == envProvider ? nil : provider.rawValue
             )
         }
-        let storedProvider: Provider? = if let raw = existing.provider { Provider.from(raw) } else { .groq }
+        let storedProvider: Provider? = if let raw = existing.provider { Provider.from(raw) } else { RuntimeConfig.defaultProvider }
         // An unknown stored provider is always replaced so the saved config stays loadable.
         let keepsProvider = storedProvider != nil && (provider == storedProvider || provider == envProvider)
         return FixitConfig(
@@ -917,6 +938,12 @@ struct OpenAICompatibleClient {
                 let content: String?
             }
             let message: Message?
+            let finishReason: String?
+
+            enum CodingKeys: String, CodingKey {
+                case message
+                case finishReason = "finish_reason"
+            }
         }
         struct Usage: Decodable {
             let cost: Double?
@@ -975,11 +1002,13 @@ struct OpenAICompatibleClient {
 
         var full = ""
         var cost: Double?
+        var truncated = false
         stream: for try await line in bytes.lines {
             switch SSELine.parse(line) {
             case .done:
                 break stream
-            case .chunk(let content, let chunkCost):
+            case .chunk(let content, let chunkCost, let chunkTruncated):
+                truncated = truncated || chunkTruncated
                 if let content, !content.isEmpty {
                     full += content
                     if let onProgress {
@@ -995,6 +1024,8 @@ struct OpenAICompatibleClient {
                 continue
             }
         }
+        // Cut-off text would replace the whole original with part of it.
+        guard !truncated else { throw truncatedError() }
         let result = full.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else {
             throw FixitError.api("\(provider.label) returned no corrected text.")
@@ -1023,12 +1054,17 @@ struct OpenAICompatibleClient {
         return .api("\(provider.label) error: \(body)")
     }
 
+    private func truncatedError() -> FixitError {
+        .api("\(config.provider.label) stopped before finishing the text, so nothing was replaced. Try a shorter selection.")
+    }
+
     private func parseSingleResponse(data: Data) throws -> (text: String, cost: Double?) {
         let provider = config.provider
         let decoded = try? JSONDecoder().decode(ResponseBody.self, from: data)
         if let message = decoded?.error?.message {
             throw FixitError.api("\(provider.label) error: \(message)")
         }
+        guard decoded?.choices?.first?.finishReason != "length" else { throw truncatedError() }
         guard let result = decoded?.choices?.first?.message?.content?.trimmingCharacters(in: .whitespacesAndNewlines), !result.isEmpty else {
             throw FixitError.api("\(provider.label) returned no corrected text.")
         }
@@ -1039,7 +1075,8 @@ struct OpenAICompatibleClient {
 // One server-sent-events line from a chat-completions stream.
 enum SSELine: Equatable {
     case done
-    case chunk(content: String?, cost: Double?)
+    // `truncated`: the provider stopped at its output limit, so the text is cut off.
+    case chunk(content: String?, cost: Double?, truncated: Bool = false)
     case error(String)
     case ignored
 
@@ -1049,6 +1086,12 @@ enum SSELine: Equatable {
                 let content: String?
             }
             let delta: Delta?
+            let finishReason: String?
+
+            enum CodingKeys: String, CodingKey {
+                case delta
+                case finishReason = "finish_reason"
+            }
         }
         let choices: [Choice]?
         let usage: OpenAICompatibleClient.ResponseBody.Usage?
@@ -1067,7 +1110,8 @@ enum SSELine: Equatable {
         if let message = decoded.error?.message {
             return .error(message)
         }
-        return .chunk(content: decoded.choices?.first?.delta?.content, cost: decoded.usage?.cost)
+        let choice = decoded.choices?.first
+        return .chunk(content: choice?.delta?.content, cost: decoded.usage?.cost, truncated: choice?.finishReason == "length")
     }
 }
 
@@ -1254,17 +1298,19 @@ enum TextSelectionIO {
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
             throw FixitError.notEditable
         }
-        guard let element = focusedElement(of: app) else {
-            return try await captureBySelectingAll()
-        }
+        // Without a focused element, select-all would grab a whole page or window, and nothing could
+        // confirm the paste lands in the same place.
+        guard let element = focusedElement(of: app) else { throw FixitError.notEditable }
         let snapshot = fieldSnapshot(of: element)
+        let hasSelection = (snapshot.selection?.length ?? 0) > 0
         let target = AutoFixTarget.decide(
             role: attribute(element, kAXRoleAttribute) as? String,
             subrole: attribute(element, kAXSubroleAttribute) as? String,
             valueSettable: isSettable(element, kAXValueAttribute),
             selectedLength: snapshot.selection?.length,
             value: snapshot.value,
-            hasInlineImages: containsImage(element)
+            // A selection is fixed as copied, so the walk only matters without one.
+            hasInlineImages: !hasSelection && containsImage(element)
         )
         var session: TextTargetSession
         switch target {
@@ -1273,11 +1319,14 @@ enum TextSelectionIO {
         case .notEditable:
             throw FixitError.notEditable
         case .unknown:
-            var session = try await captureBySelectingAll()
-            // Put the caret back so the field doesn't sit selected while the request runs.
-            if let selection = snapshot.selection {
-                select(CFRange(location: selection.location, length: 0), in: element)
+            // Put the caret back, even when the copy fails or is cancelled, so the field never sits
+            // selected where the next keystroke would replace it all.
+            defer {
+                if let selection = snapshot.selection {
+                    select(CFRange(location: selection.location, length: 0), in: element)
+                }
             }
+            var session = try await captureBySelectingAll()
             // Its value leaves out inline images: compare it to catch edits, but never write it.
             session.targetElement = element
             session.fieldSnapshot = snapshot
@@ -1299,10 +1348,9 @@ enum TextSelectionIO {
     static func targetUnchanged(_ session: TextTargetSession) -> Bool {
         // Auto-fix never refocuses, so the keystrokes land in whatever app is in front.
         guard let app = session.sourceApp,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
-        // Without a focused element at capture, the app is all there is to compare.
-        guard let element = session.targetElement else { return true }
-        guard let current = focusedElement(of: app), CFEqual(current, element),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+              let element = session.targetElement,
+              let current = focusedElement(of: app), CFEqual(current, element),
               let captured = session.fieldSnapshot else { return false }
         return fieldSnapshot(of: element).stillMatches(captured, replacingWholeField: session.replacesWholeField)
     }
@@ -1442,7 +1490,7 @@ enum TextSelectionIO {
         return rect
     }
 
-    // For apps that expose no text through accessibility.
+    // For fields that don't expose all of their text through accessibility.
     @MainActor
     private static func captureBySelectingAll() async throws -> TextTargetSession {
         simulateKey(virtualKey: CGKeyCode(kVK_ANSI_A), flags: .maskCommand)
@@ -1672,7 +1720,8 @@ enum InlineDiffBuilder {
 final class CursorPill: NSPanel {
     private let label = NSTextField(labelWithString: "")
     private let background = NSVisualEffectView()
-    private var anchor: Anchor?
+    // Kept across show() calls so follow-up messages stay put; nil is top-center of the active screen.
+    var anchor: Anchor?
     private var hideTask: Task<Void, Never>?
 
     /// What the pill points at: the caret, centered under it, or a field whose caret is unknown,
@@ -2684,6 +2733,10 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             }
             let pickerShortcut = try ShortcutParser.parse(pickerShortcutField.stringValue)
             let autoFixShortcut = try ShortcutParser.parse(autoFixShortcutField.stringValue)
+            try ShortcutParser.validate(styles.map { ($0.label, $0.shortcutKey, $0.shortcutModifiers) } + [
+                ("Picker", pickerShortcut.key, pickerShortcut.modifiers),
+                ("Auto-fix", autoFixShortcut.key, autoFixShortcut.modifiers),
+            ])
 
             if provider != .ollama {
                 try CredentialStore.saveAPIKey(apiKeyField.stringValue, provider: provider, configDir: currentConfig.configDir)
@@ -2968,38 +3021,39 @@ final class HotKeyManager {
         self.app = app
     }
 
-    func register(styles: [StyleConfig], pickerKey: String?, pickerModifiers: [String]?, autoFixKey: String?, autoFixModifiers: [String]?) {
+    /// Registers every configured shortcut; returns the ones that didn't register, as displayed in Settings.
+    @discardableResult
+    func register(styles: [StyleConfig], pickerKey: String?, pickerModifiers: [String]?, autoFixKey: String?, autoFixModifiers: [String]?) -> [String] {
         unregisterHotKeys()
         installEventHandlerIfNeeded()
 
+        var refused: [String] = []
         for (index, style) in styles.enumerated() {
-            guard let key = style.shortcutKey, let keyCode = keyCode(for: key) else { continue }
-            let hotKeyID = EventHotKeyID(signature: OSType(0x46584954), id: UInt32(index + 1)) // FXIT
-            var ref: EventHotKeyRef?
-            let status = RegisterEventHotKey(keyCode, modifiers(for: style.shortcutModifiers ?? []), hotKeyID, GetApplicationEventTarget(), 0, &ref)
-            if status == noErr, let ref {
-                registeredRefs.append(ref)
+            guard let key = style.shortcutKey else { continue }
+            if add(key: key, modifiers: style.shortcutModifiers, id: index + 1) {
                 styleByHotKeyID[index + 1] = style
+            } else {
+                refused.append(ShortcutParser.display(key: key, modifiers: style.shortcutModifiers))
             }
         }
+        for (key, modifiers, id) in [(pickerKey, pickerModifiers, Self.pickerHotKeyID), (autoFixKey, autoFixModifiers, Self.autoFixHotKeyID)] {
+            guard let key else { continue }
+            if !add(key: key, modifiers: modifiers, id: id) {
+                refused.append(ShortcutParser.display(key: key, modifiers: modifiers))
+            }
+        }
+        return refused
+    }
 
-        if let pickerKey, let keyCode = keyCode(for: pickerKey) {
-            let hotKeyID = EventHotKeyID(signature: OSType(0x46584954), id: UInt32(Self.pickerHotKeyID))
-            var ref: EventHotKeyRef?
-            let status = RegisterEventHotKey(keyCode, modifiers(for: pickerModifiers ?? []), hotKeyID, GetApplicationEventTarget(), 0, &ref)
-            if status == noErr, let ref {
-                registeredRefs.append(ref)
-            }
-        }
-
-        if let autoFixKey, let keyCode = keyCode(for: autoFixKey) {
-            let hotKeyID = EventHotKeyID(signature: OSType(0x46584954), id: UInt32(Self.autoFixHotKeyID))
-            var ref: EventHotKeyRef?
-            let status = RegisterEventHotKey(keyCode, modifiers(for: autoFixModifiers ?? []), hotKeyID, GetApplicationEventTarget(), 0, &ref)
-            if status == noErr, let ref {
-                registeredRefs.append(ref)
-            }
-        }
+    // False when macOS refuses the combination, e.g. because another app already registered it.
+    private func add(key: String, modifiers names: [String]?, id: Int) -> Bool {
+        guard let keyCode = keyCode(for: key) else { return false }
+        let hotKeyID = EventHotKeyID(signature: OSType(0x46584954), id: UInt32(id)) // FXIT
+        var ref: EventHotKeyRef?
+        guard RegisterEventHotKey(keyCode, modifiers(for: names ?? []), hotKeyID, GetApplicationEventTarget(), 0, &ref) == noErr,
+              let ref else { return false }
+        registeredRefs.append(ref)
+        return true
     }
 
     private func installEventHandlerIfNeeded() {
@@ -3241,8 +3295,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         setupMenu()
         trackFrontmostApp()
+        // Accessibility calls run on the main thread; a hung app would otherwise stall each one for ~6 s.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1)
         hotKeys = HotKeyManager(app: self)
-        hotKeys?.register(styles: config.styles, pickerKey: config.pickerKey, pickerModifiers: config.pickerModifiers, autoFixKey: config.autoFixKey, autoFixModifiers: config.autoFixModifiers)
+        registerHotKeys()
         logger.log("App started", ["provider": config.provider.rawValue, "model": config.model, "styles": config.styles.map(\.id).joined(separator: ",")])
         if ProcessInfo.processInfo.environment["FIXIT_DEBUG_SETTINGS"] == "1" {
             showSettings()
@@ -3382,12 +3438,14 @@ final class AppController: NSObject, NSApplicationDelegate {
             logger.log("autofix skipped", ["app": app])
             return .skipped
         }
-        if config.provider.requiresAPIKey, try CredentialStore.apiKey(for: config) == nil {
+        if config.provider.requiresAPIKey, CredentialStore.apiKey(for: config) == nil {
             throw FixitError.missingAPIKey(config.provider.label)
         }
         let pointer = TextSelectionIO.caretAnchor()
         logger.log("pill anchor", ["source": pointer?.source ?? "none"])
-        pill.show("Fixing…", at: pointer?.anchor)
+        // Set even when nil, so a run without a caret doesn't point at the last run's.
+        pill.anchor = pointer?.anchor
+        pill.show("Fixing…")
         let session = try await TextSelectionIO.captureForAutoFix()
         let started = Date()
         let fixed = try await client.fix(text: session.originalText, systemPrompt: promptLoader.prompt(for: style))
@@ -3396,7 +3454,11 @@ final class AppController: NSObject, NSApplicationDelegate {
         logger.log("autofix complete", ["mode": session.replacesWholeField ? "field" : "selection", "accessibility": session.focusedElement != nil, "app": session.sourceApp?.bundleIdentifier ?? "", "durationMs": Int(Date().timeIntervalSince(started) * 1000), "inputLength": session.originalText.count, "outputLength": result.count, "cost": fixed.cost ?? 0])
         guard result != session.originalText else { return .unchanged }
         guard TextSelectionIO.targetUnchanged(session) else { throw FixitError.targetChanged }
-        if config.replaceWithoutClipboard, await TextSelectionIO.replaceDirectly(with: result, in: session) {
+        // Unstructured like the paste below: a cancel mid-poll would skip its waits, report the write as
+        // failed, and paste a second copy.
+        if config.replaceWithoutClipboard, await Task(operation: { @MainActor in
+            await TextSelectionIO.replaceDirectly(with: result, in: session)
+        }).value {
             logger.log("autofix write", ["method": "direct"])
         } else {
             logger.log("autofix write", ["method": "paste"])
@@ -3529,13 +3591,25 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func reloadRuntime() throws {
+    // Returns the shortcuts that didn't register.
+    @discardableResult
+    private func reloadRuntime() throws -> [String] {
         config = try RuntimeConfig.load()
         logger = Logger(enabled: config.debugLogging, configDir: config.configDir)
         promptLoader = PromptLoader(config: config)
         client = OpenAICompatibleClient(config: config)
-        hotKeys?.register(styles: config.styles, pickerKey: config.pickerKey, pickerModifiers: config.pickerModifiers, autoFixKey: config.autoFixKey, autoFixModifiers: config.autoFixModifiers)
+        let refused = registerHotKeys()
         settingsWindow?.reload(config: config)
+        return refused
+    }
+
+    @discardableResult
+    private func registerHotKeys() -> [String] {
+        let refused = hotKeys?.register(styles: config.styles, pickerKey: config.pickerKey, pickerModifiers: config.pickerModifiers, autoFixKey: config.autoFixKey, autoFixModifiers: config.autoFixModifiers) ?? []
+        if !refused.isEmpty {
+            logger.log("hotkeys refused", ["shortcuts": refused.joined(separator: ",")])
+        }
+        return refused
     }
 
     private func setupAppIcon() {
@@ -3664,8 +3738,11 @@ final class AppController: NSObject, NSApplicationDelegate {
             settingsWindow = SettingsWindowController(config: config)
             settingsWindow?.onSave = { [weak self] in
                 do {
-                    try self?.reloadRuntime()
+                    let refused = try self?.reloadRuntime() ?? []
                     self?.setupMenu()
+                    if !refused.isEmpty {
+                        self?.showError("Couldn't register \(refused.joined(separator: ", ")). Another app may already use it; pick a different shortcut in Settings.")
+                    }
                 } catch {
                     self?.showError(error.localizedDescription)
                 }
@@ -3743,7 +3820,7 @@ func runCLIFix(styleID: String?, inlineText: String?) async throws {
         }
         style = match
     } else {
-        style = config.styles.first(where: { $0.id == "native" }) ?? config.styles.first ?? RuntimeConfig.defaultStyles[0]
+        style = RuntimeConfig.resolveStyle(id: nil, styles: config.styles)
     }
     let prompt = PromptLoader(config: config).prompt(for: style)
     let client = OpenAICompatibleClient(config: config)
