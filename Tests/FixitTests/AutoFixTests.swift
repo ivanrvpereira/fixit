@@ -55,6 +55,34 @@ import Testing
     }
 }
 
+@Suite struct BlankFieldTests {
+    @Test func emptyAndWhitespaceAreBlank() {
+        for value in ["", "  ", "\n", " \n\t ", "\u{200B}", "\u{FEFF}\n"] {
+            #expect(AutoFixTarget.isBlank(value: value, placeholder: nil, classList: []))
+        }
+    }
+
+    @Test func placeholderReportedAsValueIsBlank() {
+        #expect(AutoFixTarget.isBlank(value: "Message.", placeholder: "Message.", classList: []))
+        #expect(AutoFixTarget.isBlank(value: "Message.\n", placeholder: "Message.", classList: []))
+    }
+
+    @Test func emptyQuillEditorIsBlank() {
+        // Signal's empty composer reads "Message." and exposes no placeholder.
+        #expect(AutoFixTarget.isBlank(value: "Message.", placeholder: nil, classList: ["ql-editor", "ql-blank"]))
+    }
+
+    @Test func realTextIsNotBlank() {
+        #expect(!AutoFixTarget.isBlank(value: "teh meeting", placeholder: "Message.", classList: ["ql-editor"]))
+        #expect(!AutoFixTarget.isBlank(value: "Message.", placeholder: nil, classList: []))
+    }
+
+    @Test func unreadableValueIsNotBlank() {
+        // The copy fallback decides then.
+        #expect(!AutoFixTarget.isBlank(value: nil, placeholder: nil, classList: []))
+    }
+}
+
 @Suite struct OuterWhitespaceTests {
     @Test func restoresTrailingNewline() {
         #expect("Fixed text.".withOuterWhitespace(of: "fixd text\n") == "Fixed text.\n")
