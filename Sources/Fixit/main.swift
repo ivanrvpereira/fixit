@@ -329,6 +329,7 @@ enum FixitError: LocalizedError {
     case invalidAPIKey(String)
     case noSelection
     case notEditable
+    case unreadableField
     case secureField
     case targetChanged
     case accessibilityRequired
@@ -341,6 +342,7 @@ enum FixitError: LocalizedError {
         case .invalidAPIKey(let message): "API key is invalid. Add a valid key in Fixit Settings. \(message)"
         case .noSelection: "No text to fix. Select text (or copy it to the clipboard) and try again."
         case .notEditable: "Click into a text field first."
+        case .unreadableField: "This app doesn't let Fixit read the field, so auto-fix can't tell if it changes while fixing. Select the text first."
         case .secureField: "Fixit won't read password fields."
         case .targetChanged: "Text changed while fixing; nothing was replaced."
         case .accessibilityRequired: "Accessibility permission required. Open System Settings → Privacy & Security → Accessibility."
@@ -1171,8 +1173,10 @@ enum AutoFixTarget: Equatable {
     case field(String)
     case secure
     case notEditable
-    // Editable, but the app doesn't expose all of its text; fall back to select-all and copy.
+    // Editable, but its value leaves out inline images; fall back to select-all and copy.
     case unknown
+    // Editable, but with no readable value there's nothing to compare before replacing the whole field.
+    case unreadable
 
     static let textRoles: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole]
 
@@ -1198,8 +1202,8 @@ enum AutoFixTarget: Equatable {
         if subrole == kAXSecureTextFieldSubrole { return .secure }
         guard let role, textRoles.contains(role) || valueSettable else { return .notEditable }
         if let selectedLength, selectedLength > 0 { return .selection }
-        guard let value, !hasInlineImages else { return .unknown }
-        return .field(value)
+        guard let value else { return .unreadable }
+        return hasInlineImages ? .unknown : .field(value)
     }
 }
 
@@ -1326,6 +1330,8 @@ enum TextSelectionIO {
             throw FixitError.secureField
         case .notEditable:
             throw FixitError.notEditable
+        case .unreadable:
+            throw FixitError.unreadableField
         case .unknown:
             // Put the caret back, even when the copy fails or is cancelled, so the field never sits
             // selected where the next keystroke would replace it all.
