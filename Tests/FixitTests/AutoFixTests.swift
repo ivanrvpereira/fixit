@@ -35,10 +35,11 @@ import Testing
         #expect(AutoFixTarget.decide(role: nil, subrole: nil, valueSettable: false, selectedLength: nil, value: nil, hasInlineImages: false) == .notEditable)
     }
 
-    @Test func editableWithoutReadableValueFallsBack() {
+    @Test func editableWithoutReadableValueIsRefused() {
+        // Nothing to compare before replacing the whole field, so typing during the request would be lost.
         let target = AutoFixTarget.decide(
-            role: "AXTextArea", subrole: nil, valueSettable: false, selectedLength: nil, value: nil, hasInlineImages: false)
-        #expect(target == .unknown)
+            role: "AXTextArea", subrole: nil, valueSettable: false, selectedLength: nil, value: nil, hasInlineImages: true)
+        #expect(target == .unreadable)
     }
 
     @Test func inlineImagesFallBackToCopy() {
