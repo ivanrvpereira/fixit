@@ -3,6 +3,16 @@
     <channel>
         <title>Fixit</title>
         <item>
+            <title>0.8.0</title>
+            <pubDate>Tue, 27 Oct 2026 10:10:17 +0000</pubDate>
+            <link>https://github.com/ivanrvpereira/fixit</link>
+            <sparkle:version>0.8.0</sparkle:version>
+            <sparkle:shortVersionString>0.8.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/ivanrvpereira/fixit/releases/download/v0.8.0/Fixit-0.8.0.zip" length="1568303" type="application/octet-stream" sparkle:edSignature="4Ka+c3Dwp8RE6uJME6d9BGTTdcXfk+D+/1+0eW2eUkVJ1Iequ+/I4IQn9l3UAiGzVAmpbec8jBFkvqq0RRP4BA=="/>
+        </item>
+        <item>
             <title>0.7.0</title>
             <pubDate>Fri, 02 Oct 2026 10:20:00 +0000</pubDate>
             <link>https://github.com/ivanrvpereira/fixit</link>
