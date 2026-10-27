@@ -28,14 +28,6 @@
 - `scripts/build-app.sh` — release build, app bundle assembly, codesigning.
 - `.build/` and `dist/` — generated outputs; regenerate instead of editing.
 
-## Conventions
-- Keep to the existing `Fixit` and `FixitTests` targets unless there is a real need for more.
-- New config fields flow through `FixitConfig` and `RuntimeConfig.load()` (in `Sources/Fixit/main.swift`) before use.
-- Style IDs, prompt paths, and shortcut shapes match `config/config.example.json`.
-- Provider request/response changes belong in `OpenAICompatibleClient` in `Sources/Fixit/main.swift`.
-- App lifecycle/menu/hotkey changes belong near `AppController` and `HotKeyManager` in `Sources/Fixit/main.swift`.
-- CLI-only behavior belongs in `runCLI()` in `Sources/Fixit/main.swift`.
-
 ## Git
 - Use conventional commits: `type(scope): description`, imperative mood, under 72 characters.
 - Keep commits to one logical change.
@@ -57,3 +49,17 @@
 - Never commit secrets, API keys, `.env`, Keychain exports, or real user config.
 - Never overwrite `~/.config/fixit` from repository tasks.
 - Never hand-edit `.build/` or `dist/`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues for `ivanrvpereira/fixit`, using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Coding standards
+
+`CODING_STANDARDS.md` says where new code goes in `main.swift` and what reviewers check. Read it before adding code to `main.swift`, and apply it when reviewing Swift changes.
