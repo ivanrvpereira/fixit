@@ -233,6 +233,17 @@ import Testing
         #expect(saved.endpoints == ["groq": "https://proxy.example/v1/chat/completions"])
     }
 
+    @Test func changingProviderKeepsTheFieldsSetupDoesNotEdit() throws {
+        let dir = try makeConfigDir(config: ConfigStoreSaveTests.configWithEveryUneditedField)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try makeDraft(dir, .openAI, key: "sk-new", store: FakeKeyStore()).save()
+
+        let saved = try #require(ConfigStore.loadExistingConfig(from: dir))
+        #expect(saved.provider == "openai")
+        try ConfigStoreSaveTests.expectEveryUneditedFieldKept(in: saved)
+    }
+
     @Test func openRouterEnvironmentOverridesAreNeverSavedIntoTheMapsOnSetupSave() throws {
         let dir = try makeConfigDir()
         defer { try? FileManager.default.removeItem(at: dir) }

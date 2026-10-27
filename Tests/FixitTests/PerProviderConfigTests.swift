@@ -117,10 +117,10 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
         try save(dir, provider: .openRouter, model: "anthropic/claude-sonnet-4")
         try save(dir, provider: .groq, model: "openai/gpt-oss-120b")
 
-        let shownModel = try savedFile(dir).savedModel(for: .openRouter)
-        #expect(shownModel == "anthropic/claude-sonnet-4")
+        let shown = ConfigStore.settingsFields(for: .openRouter, configDir: dir)
+        #expect(shown.model == "anthropic/claude-sonnet-4")
 
-        try save(dir, provider: .openRouter, model: shownModel)
+        try save(dir, provider: .openRouter, model: shown.model)
 
         let back = try runtime(dir)
         #expect(back.provider == .openRouter)
@@ -135,12 +135,12 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
         try save(dir, provider: .custom, model: "local-model", endpoint: "https://llm.example/v1/chat/completions")
         try save(dir, provider: .groq, model: "openai/gpt-oss-120b")
 
-        let shown = try savedFile(dir)
-        #expect(shown.savedEndpoint(for: .custom) == "https://llm.example/v1/chat/completions")
-        #expect(shown.savedModel(for: .custom) == "local-model")
+        let shown = ConfigStore.settingsFields(for: .custom, configDir: dir)
+        #expect(shown.endpoint == "https://llm.example/v1/chat/completions")
+        #expect(shown.model == "local-model")
         #expect(try runtime(dir).baseURL.absoluteString == "https://api.groq.com/openai/v1/chat/completions")
 
-        try save(dir, provider: .custom, model: shown.savedModel(for: .custom), endpoint: shown.savedEndpoint(for: .custom))
+        try save(dir, provider: .custom, model: shown.model, endpoint: shown.endpoint)
 
         let back = try runtime(dir)
         #expect(back.provider == .custom)
@@ -173,20 +173,54 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
         #expect(try runtime(dir).model == "openai/gpt-4.1-mini")
     }
 
-    @Test func openRouterEnvironmentOverridesAreNeverSavedIntoTheMapsOnSettingsSave() throws {
-        let dir = try makeConfigDir(config: #"{"provider": "openrouter"}"#)
+    @Test func settingsShowsAndSavesConfigValuesNotOpenRouterEnvironmentOverrides() throws {
+        let dir = try makeConfigDir(config: #"{"provider": "openrouter", "models": {"openrouter": "saved/model"}}"#)
         defer { try? FileManager.default.removeItem(at: dir) }
         let env = [
             "OPENROUTER_MODEL": "env/openrouter-model",
             "OPENROUTER_BASE_URL": "https://env-openrouter.example/v1/chat/completions",
         ]
+        #expect(try runtime(dir, env: env).model == "env/openrouter-model")
 
-        try save(dir, provider: .openRouter, model: nil, env: env)
+        let shown = ConfigStore.settingsFields(for: .openRouter, configDir: dir)
+        #expect(shown.model == "saved/model")
+        #expect(shown.endpoint == "https://openrouter.ai/api/v1/chat/completions")
+
+        try save(dir, provider: .openRouter, model: shown.model, env: env)
 
         let saved = try savedFile(dir)
-        #expect(saved.models == nil)
+        #expect(saved.models == ["openrouter": "saved/model"])
         #expect(saved.endpoints == nil)
-        #expect(try runtime(dir).model == "openai/gpt-4.1-mini")
-        #expect(try runtime(dir).baseURL.absoluteString == "https://openrouter.ai/api/v1/chat/completions")
+    }
+
+    @Test func savingKeepsTheFieldsSettingsDoesNotEdit() throws {
+        let dir = try makeConfigDir(config: Self.configWithEveryUneditedField)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try save(dir, provider: .openRouter, model: "anthropic/claude-sonnet-4")
+
+        try Self.expectEveryUneditedFieldKept(in: savedFile(dir))
+    }
+
+    /// Fields neither Settings nor Check Setup edits; both save paths must write them back unchanged.
+    static let configWithEveryUneditedField = #"""
+        {
+          "provider": "groq",
+          "debugLogging": true,
+          "apiKeyEnv": "MY_GROQ_KEY",
+          "openRouterModel": "legacy/openrouter-model",
+          "openRouterBaseURL": "https://legacy-openrouter.example/v1/chat/completions",
+          "openRouterReferer": "https://referer.example",
+          "openRouterAppTitle": "My Fixit"
+        }
+        """#
+
+    static func expectEveryUneditedFieldKept(in saved: FixitConfig) throws {
+        #expect(saved.debugLogging == true)
+        #expect(saved.apiKeyEnv == "MY_GROQ_KEY")
+        #expect(saved.openRouterModel == "legacy/openrouter-model")
+        #expect(saved.openRouterBaseURL == "https://legacy-openrouter.example/v1/chat/completions")
+        #expect(saved.openRouterReferer == "https://referer.example")
+        #expect(saved.openRouterAppTitle == "My Fixit")
     }
 }
