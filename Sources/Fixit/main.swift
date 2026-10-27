@@ -134,12 +134,16 @@ enum Provider: String, CaseIterable {
 
 struct FixitConfig: Codable {
     let debugLogging: Bool?
-    let styles: [StyleConfig]?
-    let pickerShortcutKey: String?
-    let pickerShortcutModifiers: [String]?
-    let provider: String?
-    let model: String?
-    let endpoint: String?
+    var styles: [StyleConfig]?
+    var pickerShortcutKey: String?
+    var pickerShortcutModifiers: [String]?
+    var provider: String?
+    /// Per-provider model and endpoint, keyed by `Provider.rawValue`.
+    var models: [String: String]?
+    var endpoints: [String: String]?
+    // Legacy single model/endpoint; they apply only to the stored provider and move into the maps on save.
+    var model: String?
+    var endpoint: String?
     let apiKeyEnv: String?
     // Legacy OpenRouter-era keys; still honored for existing configs.
     let openRouterModel: String?
@@ -153,6 +157,8 @@ struct FixitConfig: Codable {
         pickerShortcutKey: String? = nil,
         pickerShortcutModifiers: [String]? = nil,
         provider: String? = nil,
+        models: [String: String]? = nil,
+        endpoints: [String: String]? = nil,
         model: String? = nil,
         endpoint: String? = nil,
         apiKeyEnv: String? = nil,
@@ -166,6 +172,8 @@ struct FixitConfig: Codable {
         self.pickerShortcutKey = pickerShortcutKey
         self.pickerShortcutModifiers = pickerShortcutModifiers
         self.provider = provider
+        self.models = models
+        self.endpoints = endpoints
         self.model = model
         self.endpoint = endpoint
         self.apiKeyEnv = apiKeyEnv
@@ -173,6 +181,77 @@ struct FixitConfig: Codable {
         self.openRouterBaseURL = openRouterBaseURL
         self.openRouterReferer = openRouterReferer
         self.openRouterAppTitle = openRouterAppTitle
+    }
+
+    /// The provider config.json selects; a missing one means groq, nil means unknown.
+    var storedProvider: Provider? {
+        if let provider { Provider.from(provider) } else { .groq }
+    }
+
+    /// The model saved for `provider`, ignoring the environment; nil means use its default.
+    func savedModel(for provider: Provider) -> String? {
+        if let saved = models?[provider.rawValue] { return saved }
+        if provider == storedProvider, let model { return model }
+        return provider == .openRouter ? openRouterModel : nil
+    }
+
+    /// The endpoint config.json saves for `provider`; nil means use its default.
+    /// `resolve` passes OPENROUTER_BASE_URL as `openRouterBaseURLOverride`, which outranks only the legacy `openRouterBaseURL`; Settings never passes it.
+    func savedEndpoint(for provider: Provider, openRouterBaseURLOverride: String? = nil) -> String? {
+        if let saved = endpoints?[provider.rawValue] { return saved }
+        if provider == storedProvider, let endpoint { return endpoint }
+        return provider == .openRouter ? openRouterBaseURLOverride ?? openRouterBaseURL : nil
+    }
+
+    /// The copy both save paths write: `provider` selected and the legacy top-level model/endpoint moved under the stored provider. Every other field is kept, so a field neither path edits can't be dropped.
+    func migrated(selecting provider: String?) -> FixitConfig {
+        var copy = self
+        copy.models = Self.nilIfEmpty(Self.moving(model, into: models, for: storedProvider))
+        copy.endpoints = Self.nilIfEmpty(Self.moving(endpoint, into: endpoints, for: storedProvider))
+        copy.model = nil
+        copy.endpoint = nil
+        copy.provider = provider
+        return copy
+    }
+
+    /// Saves the model Settings shows for `provider`, on a `migrated` copy. Stores nothing when it is empty or what the provider uses anyway, so a later release's new default still applies.
+    mutating func setModel(_ model: String?, for provider: Provider) {
+        models = Self.removing(provider, from: models)
+        if let model, model != savedModel(for: provider) ?? provider.defaultModel {
+            models = Self.adding(model, for: provider, to: models)
+        }
+    }
+
+    /// Saves the endpoint Settings shows for `provider`, on a `migrated` copy, with the same rule as `setModel`.
+    mutating func setEndpoint(_ endpoint: String?, for provider: Provider) {
+        endpoints = Self.removing(provider, from: endpoints)
+        if let endpoint, endpoint != savedEndpoint(for: provider) ?? provider.defaultEndpoint {
+            endpoints = Self.adding(endpoint, for: provider, to: endpoints)
+        }
+    }
+
+    private static func removing(_ provider: Provider, from map: [String: String]?) -> [String: String]? {
+        var map = map ?? [:]
+        map[provider.rawValue] = nil
+        return nilIfEmpty(map)
+    }
+
+    private static func adding(_ value: String, for provider: Provider, to map: [String: String]?) -> [String: String] {
+        var map = map ?? [:]
+        map[provider.rawValue] = value
+        return map
+    }
+
+    private static func moving(_ legacy: String?, into map: [String: String]?, for provider: Provider?) -> [String: String] {
+        var map = map ?? [:]
+        if let legacy, let provider, map[provider.rawValue] == nil {
+            map[provider.rawValue] = legacy
+        }
+        return map
+    }
+
+    private static func nilIfEmpty(_ map: [String: String]) -> [String: String]? {
+        map.isEmpty ? nil : map
     }
 }
 
@@ -212,39 +291,29 @@ struct RuntimeConfig {
         return try resolve(config, configDir: configDir, env: env)
     }
 
+    /// Undocumented overrides removed in favor of config.json. Fail instead of ignoring them: a leftover one in a .env file could otherwise silently change which provider, endpoint, or key Fixit uses.
+    static let removedEnvironmentVariables = ["FIXIT_PROVIDER", "FIXIT_MODEL", "FIXIT_ENDPOINT", "FIXIT_API_KEY_ENV"]
+
     static func resolve(_ config: FixitConfig, configDir: URL, env: [String: String]) throws -> RuntimeConfig {
-        let provider: Provider
-        if let providerRaw = env["FIXIT_PROVIDER"] ?? config.provider {
-            guard let parsed = Provider.from(providerRaw) else {
-                throw FixitError.configuration("Unknown provider: \(providerRaw). Use one of: \(Provider.allCases.map(\.rawValue).joined(separator: ", ")).")
-            }
-            provider = parsed
-        } else {
-            provider = .groq
+        if let removed = removedEnvironmentVariables.first(where: { env[$0] != nil }) {
+            throw FixitError.configuration("\(removed) is no longer supported. Remove it from your environment or .env file, and set the provider, model, and endpoint in Settings.")
+        }
+        guard let provider = config.storedProvider else {
+            throw FixitError.configuration("Unknown provider: \(config.provider ?? ""). Use one of: \(Provider.allCases.map(\.rawValue).joined(separator: ", ")).")
         }
 
-        let endpointOverride = env["FIXIT_ENDPOINT"] ?? config.endpoint
-        let apiKeyEnv = env["FIXIT_API_KEY_ENV"] ?? config.apiKeyEnv
-        let endpointString: String?
-        switch provider {
-        case .openRouter:
-            endpointString = endpointOverride ?? env["OPENROUTER_BASE_URL"] ?? config.openRouterBaseURL ?? provider.defaultEndpoint
-        default:
-            endpointString = endpointOverride ?? provider.defaultEndpoint
-        }
+        let endpointString = config.savedEndpoint(for: provider, openRouterBaseURLOverride: env["OPENROUTER_BASE_URL"])
+            ?? provider.defaultEndpoint
         guard let endpointString else {
-            throw FixitError.configuration("The custom provider needs an \"endpoint\" URL in config.json.")
+            throw FixitError.configuration("The custom provider needs an endpoint. Set it in Settings, or add \"endpoints\": {\"custom\": \"https://…\"} to config.json.")
         }
         guard let baseURL = URL(string: endpointString) else {
             throw FixitError.configuration("Invalid \(provider.label) URL: \(endpointString)")
         }
 
-        let model: String
-        if provider == .openRouter {
-            model = env["FIXIT_MODEL"] ?? env["OPENROUTER_MODEL"] ?? config.model ?? config.openRouterModel ?? provider.defaultModel
-        } else {
-            model = env["FIXIT_MODEL"] ?? config.model ?? provider.defaultModel
-        }
+        let model = (provider == .openRouter ? env["OPENROUTER_MODEL"] : nil)
+            ?? config.savedModel(for: provider)
+            ?? provider.defaultModel
 
         return RuntimeConfig(
             configDir: configDir,
@@ -257,7 +326,7 @@ struct RuntimeConfig {
             baseURL: baseURL,
             referer: env["OPENROUTER_REFERER"] ?? config.openRouterReferer,
             appTitle: env["OPENROUTER_APP_TITLE"] ?? config.openRouterAppTitle ?? "Fixit",
-            apiKeyEnv: apiKeyEnv
+            apiKeyEnv: config.apiKeyEnv
         )
     }
 
@@ -746,22 +815,24 @@ enum ConfigStore {
             try prompt.write(to: url, atomically: true, encoding: .utf8)
         }
 
-        let existing = loadExistingConfig(from: config.configDir)
-        try write(FixitConfig(
-            debugLogging: existing?.debugLogging ?? config.debugLogging,
-            styles: styles,
-            pickerShortcutKey: pickerKey,
-            pickerShortcutModifiers: pickerModifiers,
-            provider: provider.rawValue,
-            model: model,
-            // Keep a hand-edited endpoint override when the provider didn't change.
-            endpoint: endpoint ?? (existing?.provider == provider.rawValue ? existing?.endpoint : nil),
-            apiKeyEnv: existing?.apiKeyEnv,
-            openRouterModel: existing?.openRouterModel,
-            openRouterBaseURL: existing?.openRouterBaseURL,
-            openRouterReferer: existing?.openRouterReferer,
-            openRouterAppTitle: existing?.openRouterAppTitle
-        ), configDir: config.configDir)
+        let existing = loadExistingConfig(from: config.configDir) ?? FixitConfig(debugLogging: config.debugLogging)
+        var updated = existing.migrated(selecting: provider.rawValue)
+        updated.styles = styles
+        updated.pickerShortcutKey = pickerKey
+        updated.pickerShortcutModifiers = pickerModifiers
+        updated.setModel(model, for: provider)
+        updated.setEndpoint(endpoint, for: provider)
+        try write(updated, configDir: config.configDir)
+    }
+
+    /// The model and endpoint Settings shows for `provider`: what config.json saves, else the provider's defaults.
+    /// Never the runtime values, which include OPENROUTER_MODEL and OPENROUTER_BASE_URL, so saving can't write them into the file.
+    static func settingsFields(for provider: Provider, configDir: URL) -> (model: String, endpoint: String) {
+        let saved = loadExistingConfig(from: configDir)
+        return (
+            model: saved?.savedModel(for: provider) ?? provider.defaultModel,
+            endpoint: saved?.savedEndpoint(for: provider) ?? provider.defaultEndpoint ?? ""
+        )
     }
 
     static func write(_ config: FixitConfig, configDir: URL) throws {
@@ -797,10 +868,6 @@ struct SetupDraft {
     /// Resolves what `save()` would write, without writing it or the key.
     func testClient() throws -> OpenAICompatibleClient {
         let runtime = try RuntimeConfig.resolve(pendingConfig(), configDir: configDir, env: env)
-        // FIXIT_PROVIDER outranks config.json; never send this provider's key to another one.
-        guard runtime.provider == provider else {
-            throw FixitError.configuration("FIXIT_PROVIDER selects \(runtime.provider.label), not \(provider.label). Choose \(runtime.provider.label) or unset FIXIT_PROVIDER.")
-        }
         let typed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         // A cleared field falls back to the environment, as it will after save; never to the old stored key.
         let key = typed.isEmpty ? CredentialStore.environmentAPIKey(for: runtime, env: env) ?? "" : typed
@@ -814,10 +881,8 @@ struct SetupDraft {
         try ConfigStore.write(pendingConfig(), configDir: configDir)
     }
 
-    // Only a provider change rewrites provider and resets model and endpoint to its defaults.
+    // Only a provider change rewrites provider; every provider keeps its saved model and endpoint.
     private func pendingConfig() -> FixitConfig {
-        // Setup shows the FIXIT_PROVIDER-resolved provider; keeping it must not persist the env override.
-        let envProvider = env["FIXIT_PROVIDER"].flatMap(Provider.from)
         guard let existing = ConfigStore.loadExistingConfig(from: configDir) else {
             // Fresh (or unreadable) config: write usable defaults so onboarding never shows again.
             return FixitConfig(
@@ -825,26 +890,12 @@ struct SetupDraft {
                 styles: RuntimeConfig.defaultStyles,
                 pickerShortcutKey: "0",
                 pickerShortcutModifiers: ["command", "shift"],
-                provider: provider == envProvider ? nil : provider.rawValue
+                provider: provider.rawValue
             )
         }
-        let storedProvider: Provider? = if let raw = existing.provider { Provider.from(raw) } else { .groq }
-        // An unknown stored provider is always replaced so the saved config stays loadable.
-        let keepsProvider = storedProvider != nil && (provider == storedProvider || provider == envProvider)
-        return FixitConfig(
-            debugLogging: existing.debugLogging,
-            styles: existing.styles,
-            pickerShortcutKey: existing.pickerShortcutKey,
-            pickerShortcutModifiers: existing.pickerShortcutModifiers,
-            provider: keepsProvider ? existing.provider : provider.rawValue,
-            model: keepsProvider ? existing.model : nil,
-            endpoint: keepsProvider ? existing.endpoint : nil,
-            apiKeyEnv: existing.apiKeyEnv,
-            openRouterModel: existing.openRouterModel,
-            openRouterBaseURL: existing.openRouterBaseURL,
-            openRouterReferer: existing.openRouterReferer,
-            openRouterAppTitle: existing.openRouterAppTitle
-        )
+        // Keeping the stored provider keeps its exact spelling (or its absence); an unknown stored provider never matches, so it is replaced and the saved config stays loadable.
+        let keepsProvider = existing.storedProvider == provider
+        return existing.migrated(selecting: keepsProvider ? existing.provider : provider.rawValue)
     }
 }
 
@@ -1646,6 +1697,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private let providerLinkLabel = LinkLabel.make()
     private let providerHelpRow = NSStackView()
     private let modelField = NSTextField()
+    private let recommendedModelButton = NSButton(title: "", target: nil, action: nil)
     private let endpointField = NSTextField()
     private let pickerShortcutField = NSTextField()
     private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch Fixit at login", target: nil, action: nil)
@@ -1707,8 +1759,20 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         applyProviderSelection(selectedProvider)
     }
 
+    @objc private func useRecommendedModelPressed() {
+        modelField.stringValue = selectedProvider.defaultModel
+        updateRecommendedModelButton()
+    }
+
+    private func updateRecommendedModelButton() {
+        let defaultModel = selectedProvider.defaultModel
+        recommendedModelButton.title = "Use recommended (\(defaultModel))"
+        recommendedModelButton.isHidden = defaultModel.isEmpty
+        recommendedModelButton.isEnabled = modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) != defaultModel
+    }
+
     private func applyProviderSelection(_ provider: Provider) {
-        let isActive = provider == currentConfig.provider
+        let shown = ConfigStore.settingsFields(for: provider, configDir: currentConfig.configDir)
         apiKeyField.stringValue = CredentialStore.storedAPIKey(provider: provider, configDir: currentConfig.configDir) ?? ""
         apiKeyField.placeholderString = provider == .ollama ? "No API key required" : "\(provider.label) API key"
         apiKeyField.isEnabled = provider != .ollama
@@ -1721,15 +1785,11 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             providerLinkLabel.isHidden = true
         }
         window?.invalidateCursorRects(for: providerLinkLabel)
-        modelField.stringValue = isActive ? currentConfig.model : provider.defaultModel
+        modelField.stringValue = shown.model
         modelField.placeholderString = provider.defaultModel.isEmpty ? "model id" : provider.defaultModel
-        endpointField.isEditable = provider == .custom
-        endpointField.placeholderString = "https://host/v1/chat/completions"
-        if provider == .custom {
-            endpointField.stringValue = isActive ? currentConfig.baseURL.absoluteString : ""
-        } else {
-            endpointField.stringValue = isActive ? currentConfig.baseURL.absoluteString : (provider.defaultEndpoint ?? "")
-        }
+        updateRecommendedModelButton()
+        endpointField.placeholderString = provider.defaultEndpoint ?? "https://host/v1/chat/completions"
+        endpointField.stringValue = shown.endpoint
     }
 
     // Debug aid for FIXIT_DEBUG_SETTINGS=1: prints resolved frames so layout can be verified from the CLI.
@@ -1740,6 +1800,8 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         for view in contentView.subviews {
             lines.append("  \(type(of: view)): \(view.frame)")
         }
+        lines.append("  modelField: \(modelField.convert(modelField.bounds, to: contentView))")
+        lines.append("  recommendedModelButton: \(recommendedModelButton.convert(recommendedModelButton.bounds, to: contentView)) hidden=\(recommendedModelButton.isHidden) enabled=\(recommendedModelButton.isEnabled) title=\(recommendedModelButton.title)")
         FileHandle.standardError.write(Data((lines.joined(separator: "\n") + "\n").utf8))
         if let rep = contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds) {
             contentView.cacheDisplay(in: contentView.bounds, to: rep)
@@ -1787,11 +1849,20 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         providerHelpRow.addArrangedSubview(providerHelpLabel)
         providerHelpRow.addArrangedSubview(providerLinkLabel)
 
+        modelField.delegate = self
+        recommendedModelButton.target = self
+        recommendedModelButton.action = #selector(useRecommendedModelPressed)
+        recommendedModelButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        let modelRow = NSStackView(views: [modelField, recommendedModelButton])
+        modelRow.orientation = .horizontal
+        modelRow.alignment = .firstBaseline
+        modelRow.spacing = 8
+
         let formGrid = NSGridView(views: [
             [formLabel("Provider:"), providerPopup],
             [formLabel("API Key:"), apiKeyField],
             [NSGridCell.emptyContentView, providerHelpRow],
-            [formLabel("Model:"), modelField],
+            [formLabel("Model:"), modelRow],
             [formLabel("Endpoint:"), endpointField],
             [formLabel("Picker Shortcut:"), pickerShortcutField],
             [NSGridCell.emptyContentView, launchAtLoginCheckbox],
@@ -2013,8 +2084,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         promptView.string = displayedStyle?.prompt ?? ""
     }
 
-    // Keep the sidebar name in sync while the user types.
+    // Keep the sidebar name and the recommended-model button in sync while the user types.
     func controlTextDidChange(_ notification: Notification) {
+        if (notification.object as? NSTextField) === modelField {
+            updateRecommendedModelButton()
+            return
+        }
         guard (notification.object as? NSTextField) === styleNameField,
               let draft = displayedStyle,
               let row = styleDrafts.firstIndex(where: { $0 === draft }) else { return }
@@ -2070,13 +2145,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             let provider = selectedProvider
             let model = modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let endpoint = endpointField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            var customEndpoint: String?
-            if provider == .custom {
-                guard !endpoint.isEmpty, URL(string: endpoint) != nil else {
-                    statusLabel.stringValue = "The custom provider needs a full chat completions endpoint URL."
-                    return
-                }
-                customEndpoint = endpoint
+            // An empty endpoint means the provider's default; Custom has none, so it needs one.
+            guard endpoint.isEmpty ? provider != .custom : URL(string: endpoint) != nil else {
+                statusLabel.stringValue = provider == .custom
+                    ? "The custom provider needs a full chat completions endpoint URL."
+                    : "The endpoint must be a full chat completions URL, or empty for the \(provider.label) default."
+                return
             }
 
             // Validate every shortcut before persisting anything, so a typo
@@ -2108,7 +2182,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
                 prompts: prompts,
                 provider: provider,
                 model: model.isEmpty ? nil : model,
-                endpoint: customEndpoint
+                endpoint: endpoint.isEmpty ? nil : endpoint
             )
 
             statusLabel.stringValue = "Saved."
