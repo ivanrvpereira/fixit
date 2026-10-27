@@ -55,5 +55,5 @@
 ### Never
 - Never tag a release, regenerate the signing identity, or push to the tap repo without explicit approval.
 - Never commit secrets, API keys, `.env`, Keychain exports, or real user config.
-- Never overwrite `~/.config/fixit` or `~/.config/word-fixer` from repository tasks.
+- Never overwrite `~/.config/fixit` from repository tasks.
 - Never hand-edit `.build/` or `dist/`.

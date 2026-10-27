@@ -4,27 +4,13 @@ import Testing
 
 @Suite struct ConfigDirResolutionTests {
     @Test func explicitOverrideWins() {
-        let path = RuntimeConfig.resolveConfigDirPath(
-            configured: "/custom", defaultPath: "/new", legacyPath: "/old", exists: { _ in true })
+        let path = RuntimeConfig.resolveConfigDirPath(configured: "/custom", defaultPath: "/default")
         #expect(path == "/custom")
     }
 
-    @Test func freshInstallUsesNewPath() {
-        let path = RuntimeConfig.resolveConfigDirPath(
-            configured: nil, defaultPath: "/new", legacyPath: "/old", exists: { _ in false })
-        #expect(path == "/new")
-    }
-
-    @Test func legacyPathUsedOnlyWhenItExists() {
-        let path = RuntimeConfig.resolveConfigDirPath(
-            configured: nil, defaultPath: "/new", legacyPath: "/old", exists: { $0 == "/old" })
-        #expect(path == "/old")
-    }
-
-    @Test func newPathPreferredWhenBothExist() {
-        let path = RuntimeConfig.resolveConfigDirPath(
-            configured: nil, defaultPath: "/new", legacyPath: "/old", exists: { _ in true })
-        #expect(path == "/new")
+    @Test func defaultPathUsedWithoutOverride() {
+        #expect(RuntimeConfig.resolveConfigDirPath(configured: nil, defaultPath: "/default") == "/default")
+        #expect(RuntimeConfig.resolveConfigDirPath(configured: "", defaultPath: "/default") == "/default")
     }
 }
 

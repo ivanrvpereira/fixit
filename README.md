@@ -131,8 +131,6 @@ OPENROUTER_APP_TITLE=Fixit
 
 The app also accepts `openRouterModel`, `openRouterBaseURL`, `openRouterReferer`, and `openRouterAppTitle` in `~/.config/fixit/config.json`. To use the checked-in sample prompts instead, copy `config/config.example.json` to `config/config.json` and run with `FIXIT_CONFIG_DIR=$PWD/config`.
 
-If `~/.config/fixit` doesn't exist yet, Fixit falls back to an old `~/.config/word-fixer` config.
-
 </details>
 
 ## CLI

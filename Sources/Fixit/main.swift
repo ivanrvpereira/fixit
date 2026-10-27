@@ -193,13 +193,9 @@ struct RuntimeConfig {
         let env = DotEnv.loadMergedEnvironment()
         let home = FileManager.default.homeDirectoryForCurrentUser
         let defaultConfigDir = home.appendingPathComponent(".config/fixit")
-        let legacyConfigDir = home.appendingPathComponent(".config/word-fixer")
-        let configuredDir = env["FIXIT_CONFIG_DIR"] ?? env["WORD_FIXER_CONFIG_DIR"]
         let configDir = URL(fileURLWithPath: resolveConfigDirPath(
-            configured: configuredDir,
-            defaultPath: defaultConfigDir.path,
-            legacyPath: legacyConfigDir.path,
-            exists: { FileManager.default.fileExists(atPath: $0) }
+            configured: env["FIXIT_CONFIG_DIR"],
+            defaultPath: defaultConfigDir.path
         ))
         let configURL = configDir.appendingPathComponent("config.json")
         let config: FixitConfig
@@ -261,14 +257,9 @@ struct RuntimeConfig {
         )
     }
 
-    // Fall back to the legacy word-fixer dir only when it actually exists;
-    // fresh installs must land in the new path.
-    static func resolveConfigDirPath(configured: String?, defaultPath: String, legacyPath: String, exists: (String) -> Bool) -> String {
+    static func resolveConfigDirPath(configured: String?, defaultPath: String) -> String {
         if let configured, !configured.isEmpty {
             return configured
-        }
-        if !exists(defaultPath), exists(legacyPath) {
-            return legacyPath
         }
         return defaultPath
     }
@@ -476,7 +467,6 @@ enum DotEnv {
         let home = FileManager.default.homeDirectoryForCurrentUser
         var urls = [cwd.appendingPathComponent(".env")]
         urls.append(home.appendingPathComponent(".config/fixit/.env"))
-        urls.append(home.appendingPathComponent(".config/word-fixer/.env"))
         if let executable = Bundle.main.executableURL {
             var directory = executable.deletingLastPathComponent()
             for _ in 0..<6 {
