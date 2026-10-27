@@ -214,17 +214,32 @@ struct FixitConfig: Codable {
         return copy
     }
 
-    /// Saves `model` for `provider`; nil removes the entry so the provider's default applies.
+    /// Saves the model Settings shows for `provider`, on a `migrated` copy. Stores nothing when it is empty or what the provider uses anyway, so a later release's new default still applies.
     mutating func setModel(_ model: String?, for provider: Provider) {
-        var map = models ?? [:]
-        map[provider.rawValue] = model
-        models = Self.nilIfEmpty(map)
+        models = Self.removing(provider, from: models)
+        if let model, model != savedModel(for: provider) ?? provider.defaultModel {
+            models = Self.adding(model, for: provider, to: models)
+        }
     }
 
-    mutating func setEndpoint(_ endpoint: String, for provider: Provider) {
-        var map = endpoints ?? [:]
-        map[provider.rawValue] = endpoint
-        endpoints = map
+    /// Saves the endpoint Settings shows for `provider`, on a `migrated` copy, with the same rule as `setModel`.
+    mutating func setEndpoint(_ endpoint: String?, for provider: Provider) {
+        endpoints = Self.removing(provider, from: endpoints)
+        if let endpoint, endpoint != savedEndpoint(for: provider) ?? provider.defaultEndpoint {
+            endpoints = Self.adding(endpoint, for: provider, to: endpoints)
+        }
+    }
+
+    private static func removing(_ provider: Provider, from map: [String: String]?) -> [String: String]? {
+        var map = map ?? [:]
+        map[provider.rawValue] = nil
+        return nilIfEmpty(map)
+    }
+
+    private static func adding(_ value: String, for provider: Provider, to map: [String: String]?) -> [String: String] {
+        var map = map ?? [:]
+        map[provider.rawValue] = value
+        return map
     }
 
     private static func moving(_ legacy: String?, into map: [String: String]?, for provider: Provider?) -> [String: String] {
@@ -806,10 +821,7 @@ enum ConfigStore {
         updated.pickerShortcutKey = pickerKey
         updated.pickerShortcutModifiers = pickerModifiers
         updated.setModel(model, for: provider)
-        // Built-in endpoints are read-only in Settings, so only Custom passes one; keep any saved endpoint otherwise.
-        if let endpoint {
-            updated.setEndpoint(endpoint, for: provider)
-        }
+        updated.setEndpoint(endpoint, for: provider)
         try write(updated, configDir: config.configDir)
     }
 
@@ -1776,8 +1788,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         modelField.stringValue = shown.model
         modelField.placeholderString = provider.defaultModel.isEmpty ? "model id" : provider.defaultModel
         updateRecommendedModelButton()
-        endpointField.isEditable = provider == .custom
-        endpointField.placeholderString = "https://host/v1/chat/completions"
+        endpointField.placeholderString = provider.defaultEndpoint ?? "https://host/v1/chat/completions"
         endpointField.stringValue = shown.endpoint
     }
 
@@ -2134,13 +2145,12 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             let provider = selectedProvider
             let model = modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let endpoint = endpointField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            var customEndpoint: String?
-            if provider == .custom {
-                guard !endpoint.isEmpty, URL(string: endpoint) != nil else {
-                    statusLabel.stringValue = "The custom provider needs a full chat completions endpoint URL."
-                    return
-                }
-                customEndpoint = endpoint
+            // An empty endpoint means the provider's default; Custom has none, so it needs one.
+            guard endpoint.isEmpty ? provider != .custom : URL(string: endpoint) != nil else {
+                statusLabel.stringValue = provider == .custom
+                    ? "The custom provider needs a full chat completions endpoint URL."
+                    : "The endpoint must be a full chat completions URL, or empty for the \(provider.label) default."
+                return
             }
 
             // Validate every shortcut before persisting anything, so a typo
@@ -2172,7 +2182,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
                 prompts: prompts,
                 provider: provider,
                 model: model.isEmpty ? nil : model,
-                endpoint: customEndpoint
+                endpoint: endpoint.isEmpty ? nil : endpoint
             )
 
             statusLabel.stringValue = "Saved."

@@ -115,7 +115,7 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
         defer { try? FileManager.default.removeItem(at: dir) }
 
         try save(dir, provider: .openRouter, model: "anthropic/claude-sonnet-4")
-        try save(dir, provider: .groq, model: "openai/gpt-oss-120b")
+        try save(dir, provider: .groq, model: "llama-3.3-70b-versatile")
 
         let shown = ConfigStore.settingsFields(for: .openRouter, configDir: dir)
         #expect(shown.model == "anthropic/claude-sonnet-4")
@@ -125,7 +125,7 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
         let back = try runtime(dir)
         #expect(back.provider == .openRouter)
         #expect(back.model == "anthropic/claude-sonnet-4")
-        #expect(try savedFile(dir).savedModel(for: .groq) == "openai/gpt-oss-120b")
+        #expect(try savedFile(dir).savedModel(for: .groq) == "llama-3.3-70b-versatile")
     }
 
     @Test func switchingAwayFromCustomAndBackKeepsItsEndpoint() throws {
@@ -154,12 +154,12 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
             """#)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        try save(dir, provider: .groq, model: "openai/gpt-oss-120b")
+        try save(dir, provider: .groq, model: "llama-3.3-70b-versatile")
 
         let saved = try savedFile(dir)
         #expect(saved.model == nil)
         #expect(saved.endpoint == nil)
-        #expect(saved.models == ["openrouter": "anthropic/claude-sonnet-4", "groq": "openai/gpt-oss-120b"])
+        #expect(saved.models == ["openrouter": "anthropic/claude-sonnet-4", "groq": "llama-3.3-70b-versatile"])
         #expect(saved.endpoints == ["openrouter": "https://proxy.example/v1/chat/completions"])
     }
 
@@ -170,6 +170,49 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
         try save(dir, provider: .openRouter, model: nil)
 
         #expect(try savedFile(dir).savedModel(for: .openRouter) == nil)
+        #expect(try runtime(dir).model == "openai/gpt-4.1-mini")
+    }
+
+    @Test func savingTheProviderDefaultsStoresNothingSoLaterDefaultsApply() throws {
+        let dir = try makeConfigDir(config: #"""
+            {"provider": "groq", "models": {"groq": "llama-3.3-70b-versatile"}, "endpoints": {"groq": "https://proxy.example/v1/chat/completions"}}
+            """#)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try save(dir, provider: .groq, model: "openai/gpt-oss-120b", endpoint: "https://api.groq.com/openai/v1/chat/completions")
+
+        let saved = try savedFile(dir)
+        #expect(saved.models == nil)
+        #expect(saved.endpoints == nil)
+    }
+
+    @Test func clearingABuiltInEndpointRestoresItsDefault() throws {
+        let dir = try makeConfigDir(config: #"{"provider": "groq", "endpoints": {"groq": "https://proxy.example/v1/chat/completions"}}"#)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try save(dir, provider: .groq, model: nil, endpoint: nil)
+
+        #expect(try savedFile(dir).endpoints == nil)
+        #expect(try runtime(dir).baseURL.absoluteString == "https://api.groq.com/openai/v1/chat/completions")
+    }
+
+    @Test func editedBuiltInEndpointIsSaved() throws {
+        let dir = try makeConfigDir(config: #"{"provider": "groq"}"#)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try save(dir, provider: .groq, model: nil, endpoint: "https://proxy.example/v1/chat/completions")
+
+        #expect(try savedFile(dir).endpoints == ["groq": "https://proxy.example/v1/chat/completions"])
+        #expect(try runtime(dir).baseURL.absoluteString == "https://proxy.example/v1/chat/completions")
+    }
+
+    @Test func defaultModelIsStoredWhenALegacyOpenRouterModelWouldOtherwiseApply() throws {
+        let dir = try makeConfigDir(config: #"{"provider": "openrouter", "openRouterModel": "legacy/openrouter-model"}"#)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try save(dir, provider: .openRouter, model: "openai/gpt-4.1-mini")
+
+        #expect(try savedFile(dir).models == ["openrouter": "openai/gpt-4.1-mini"])
         #expect(try runtime(dir).model == "openai/gpt-4.1-mini")
     }
 
