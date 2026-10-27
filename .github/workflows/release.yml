@@ -97,6 +97,23 @@ jobs:
             --issuer "$NOTARY_API_ISSUER_ID" --wait
           xcrun stapler staple "Fixit-$VERSION.dmg"
 
+      # Check the exact artifacts users download, as Gatekeeper would, so a
+      # broken signature or missing ticket fails here before anything ships.
+      - name: Verify Gatekeeper accepts artifacts
+        run: |
+          set -euo pipefail
+          CHECK="$(mktemp -d)"
+          ditto -x -k "Fixit-$VERSION.zip" "$CHECK/zip"
+          spctl --assess -vv --type execute "$CHECK/zip/Fixit.app"
+          xcrun stapler validate "$CHECK/zip/Fixit.app"
+          codesign --verify --deep --strict "$CHECK/zip/Fixit.app"
+          spctl --assess -vv --type open --context context:primary-signature "Fixit-$VERSION.dmg"
+          xcrun stapler validate "Fixit-$VERSION.dmg"
+          MOUNT="$(hdiutil attach -nobrowse -readonly "Fixit-$VERSION.dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')"
+          trap 'hdiutil detach "$MOUNT" -quiet || true' EXIT
+          spctl --assess -vv --type execute "$MOUNT/Fixit.app"
+          xcrun stapler validate "$MOUNT/Fixit.app"
+
       - name: Generate appcast
         env:
           GH_TOKEN: ${{ github.token }}
