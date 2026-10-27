@@ -28,6 +28,17 @@ private let tempDir = URL(fileURLWithPath: "/tmp/fixit-unused-config-dir")
 
         #expect(runtime.model == "env/openrouter-model")
     }
+
+    @Test(arguments: ["FIXIT_PROVIDER", "FIXIT_MODEL", "FIXIT_ENDPOINT", "FIXIT_API_KEY_ENV"])
+    func removedFixitOverrideStopsLoadingInsteadOfBeingIgnored(name: String) throws {
+        let config = try decode(#"{"provider": "groq"}"#)
+
+        let error = #expect(throws: FixitError.self) {
+            try RuntimeConfig.resolve(config, configDir: tempDir, env: [name: "custom"])
+        }
+
+        #expect(error?.localizedDescription.contains(name) == true)
+    }
 }
 
 @Suite struct FixitConfigSavedValuesTests {

@@ -258,7 +258,13 @@ struct RuntimeConfig {
         return try resolve(config, configDir: configDir, env: env)
     }
 
+    /// Undocumented overrides removed in favor of config.json. Fail instead of ignoring them: a leftover one in a .env file could otherwise silently change which provider, endpoint, or key Fixit uses.
+    static let removedEnvironmentVariables = ["FIXIT_PROVIDER", "FIXIT_MODEL", "FIXIT_ENDPOINT", "FIXIT_API_KEY_ENV"]
+
     static func resolve(_ config: FixitConfig, configDir: URL, env: [String: String]) throws -> RuntimeConfig {
+        if let removed = removedEnvironmentVariables.first(where: { env[$0] != nil }) {
+            throw FixitError.configuration("\(removed) is no longer supported. Remove it from your environment or .env file, and set the provider, model, and endpoint in Settings.")
+        }
         guard let provider = config.storedProvider else {
             throw FixitError.configuration("Unknown provider: \(config.provider ?? ""). Use one of: \(Provider.allCases.map(\.rawValue).joined(separator: ", ")).")
         }
