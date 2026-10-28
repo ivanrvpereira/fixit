@@ -6,52 +6,65 @@ import Testing
 @Suite struct AutoFixTargetTests {
     @Test func passwordFieldIsRefused() {
         let target = AutoFixTarget.decide(
-            role: "AXTextField", subrole: "AXSecureTextField", valueSettable: true, selectedLength: 0, value: "hunter2", hasInlineImages: false)
+            role: "AXTextField", subrole: "AXSecureTextField", valueSettable: true, selectedLength: 0, value: "hunter2", selectedText: nil, hasInlineImages: false)
         #expect(target == .secure)
     }
 
     @Test func selectionWinsOverWholeField() {
         let target = AutoFixTarget.decide(
-            role: "AXTextArea", subrole: nil, valueSettable: true, selectedLength: 4, value: "some text here", hasInlineImages: false)
+            role: "AXTextArea", subrole: nil, valueSettable: true, selectedLength: 4, value: "some text here", selectedText: nil, hasInlineImages: false)
         #expect(target == .selection)
     }
 
     @Test func noSelectionFixesWholeField() {
         let target = AutoFixTarget.decide(
-            role: "AXTextField", subrole: nil, valueSettable: true, selectedLength: 0, value: "lets go", hasInlineImages: false)
+            role: "AXTextField", subrole: nil, valueSettable: true, selectedLength: 0, value: "lets go", selectedText: nil, hasInlineImages: false)
         #expect(target == .field("lets go"))
     }
 
     @Test func settableValueCountsAsEditable() {
         let target = AutoFixTarget.decide(
-            role: "AXGroup", subrole: nil, valueSettable: true, selectedLength: nil, value: "rich editor text", hasInlineImages: false)
+            role: "AXGroup", subrole: nil, valueSettable: true, selectedLength: nil, value: "rich editor text", selectedText: nil, hasInlineImages: false)
         #expect(target == .field("rich editor text"))
     }
 
     @Test func nonEditableElementIsRejected() {
         let target = AutoFixTarget.decide(
-            role: "AXWebArea", subrole: nil, valueSettable: false, selectedLength: 10, value: nil, hasInlineImages: false)
+            role: "AXWebArea", subrole: nil, valueSettable: false, selectedLength: 10, value: nil, selectedText: nil, hasInlineImages: false)
         #expect(target == .notEditable)
-        #expect(AutoFixTarget.decide(role: nil, subrole: nil, valueSettable: false, selectedLength: nil, value: nil, hasInlineImages: false) == .notEditable)
+        #expect(AutoFixTarget.decide(role: nil, subrole: nil, valueSettable: false, selectedLength: nil, value: nil, selectedText: nil, hasInlineImages: false) == .notEditable)
     }
 
     @Test func editableWithoutReadableValueIsRefused() {
         // Nothing to compare before replacing the whole field, so typing during the request would be lost.
         let target = AutoFixTarget.decide(
-            role: "AXTextArea", subrole: nil, valueSettable: false, selectedLength: nil, value: nil, hasInlineImages: true)
+            role: "AXTextArea", subrole: nil, valueSettable: false, selectedLength: nil, value: nil, selectedText: nil, hasInlineImages: true)
         #expect(target == .unreadable)
+    }
+
+    @Test func selectionInUnreadableFieldIsCheckedByItsSelectedText() {
+        // With no readable value, the selected text is all that can show an edit made while fixing.
+        let target = AutoFixTarget.decide(
+            role: "AXTextArea", subrole: nil, valueSettable: true, selectedLength: 4, value: nil, selectedText: "some", hasInlineImages: false)
+        #expect(target == .selection)
+    }
+
+    @Test func selectionWithNothingReadableIsRefused() {
+        let target = AutoFixTarget.decide(
+            role: "AXTextArea", subrole: nil, valueSettable: true, selectedLength: 4, value: nil, selectedText: nil, hasInlineImages: false)
+        #expect(target == .unreadableSelection)
     }
 
     @Test func inlineImagesFallBackToCopy() {
         // Slack draws emoji as images that its value leaves out; fixing that value would delete them.
         let target = AutoFixTarget.decide(
-            role: "AXTextArea", subrole: nil, valueSettable: true, selectedLength: 0, value: "they are going \n", hasInlineImages: true)
+            role: "AXTextArea", subrole: nil, valueSettable: true, selectedLength: 0, value: "they are going \n", selectedText: nil, hasInlineImages: true)
         #expect(target == .unknown)
     }
 
     @Test func emptyFieldIsPassedThrough() {
         let target = AutoFixTarget.decide(
-            role: "AXTextField", subrole: nil, valueSettable: true, selectedLength: 0, value: "", hasInlineImages: false)
+            role: "AXTextField", subrole: nil, valueSettable: true, selectedLength: 0, value: "", selectedText: nil, hasInlineImages: false)
         #expect(target == .field(""))
     }
 }
@@ -228,6 +241,13 @@ import Testing
 
     @Test func selectionFixAcceptsAnUnchangedField() {
         #expect(captured.stillMatches(captured, replacingWholeField: false))
+    }
+
+    @Test func selectionFixRefusesSelectedTextEditedInPlace() {
+        // An unreadable field: same selection, but its text changed while fixing.
+        let unreadable = FieldSnapshot(value: nil, selection: NSRange(location: 0, length: 4), selectedText: "some")
+        let now = FieldSnapshot(value: nil, selection: NSRange(location: 0, length: 4), selectedText: "sum!")
+        #expect(!now.stillMatches(unreadable, replacingWholeField: false))
     }
 }
 

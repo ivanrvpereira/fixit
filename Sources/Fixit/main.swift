@@ -330,6 +330,7 @@ enum FixitError: LocalizedError {
     case noSelection
     case notEditable
     case unreadableField
+    case unreadableSelection
     case secureField
     case targetChanged
     case accessibilityRequired
@@ -343,6 +344,7 @@ enum FixitError: LocalizedError {
         case .noSelection: "No text to fix. Select text (or copy it to the clipboard) and try again."
         case .notEditable: "Click into a text field first."
         case .unreadableField: "This app doesn't let Fixit read the field, so auto-fix can't tell if it changes while fixing. Select the text first."
+        case .unreadableSelection: "This app doesn't let Fixit read the selected text, so auto-fix can't tell if it changes while fixing. Use a style's shortcut to review the fix instead."
         case .secureField: "Fixit won't read password fields."
         case .targetChanged: "Text changed while fixing; nothing was replaced."
         case .accessibilityRequired: "Accessibility permission required. Open System Settings → Privacy & Security → Accessibility."
@@ -1157,6 +1159,8 @@ struct TextTargetSession {
 struct FieldSnapshot: Equatable {
     let value: String?
     let selection: NSRange?
+    // Read only when `value` can't be: then it's all that shows the selected text was edited in place.
+    var selectedText: String?
 
     /// Whether a fix captured as `captured` can still be written. A whole-field fix replaces all the
     /// text and puts the caret back itself, so only the text has to match; apps such as Messages move
@@ -1177,6 +1181,8 @@ enum AutoFixTarget: Equatable {
     case unknown
     // Editable, but with no readable value there's nothing to compare before replacing the whole field.
     case unreadable
+    // A selection in such a field whose text can't be read either, so an edit in place would go unnoticed.
+    case unreadableSelection
 
     static let textRoles: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole]
 
@@ -1198,10 +1204,12 @@ enum AutoFixTarget: Equatable {
 
     // `hasInlineImages`: rich editors like Slack's draw emoji as images and leave them out of the value,
     // so fixing that value would delete them.
-    static func decide(role: String?, subrole: String?, valueSettable: Bool, selectedLength: Int?, value: String?, hasInlineImages: Bool) -> AutoFixTarget {
+    static func decide(role: String?, subrole: String?, valueSettable: Bool, selectedLength: Int?, value: String?, selectedText: String?, hasInlineImages: Bool) -> AutoFixTarget {
         if subrole == kAXSecureTextFieldSubrole { return .secure }
         guard let role, textRoles.contains(role) || valueSettable else { return .notEditable }
-        if let selectedLength, selectedLength > 0 { return .selection }
+        if let selectedLength, selectedLength > 0 {
+            return value != nil || selectedText != nil ? .selection : .unreadableSelection
+        }
         guard let value else { return .unreadable }
         return hasInlineImages ? .unknown : .field(value)
     }
@@ -1321,6 +1329,7 @@ enum TextSelectionIO {
             valueSettable: isSettable(element, kAXValueAttribute),
             selectedLength: snapshot.selection?.length,
             value: snapshot.value,
+            selectedText: snapshot.selectedText,
             // A selection is fixed as copied, so the walk only matters without one.
             hasInlineImages: !hasSelection && containsImage(element)
         )
@@ -1332,6 +1341,8 @@ enum TextSelectionIO {
             throw FixitError.notEditable
         case .unreadable:
             throw FixitError.unreadableField
+        case .unreadableSelection:
+            throw FixitError.unreadableSelection
         case .unknown:
             // Put the caret back, even when the copy fails or is cancelled, so the field never sits
             // selected where the next keystroke would replace it all.
@@ -1531,7 +1542,12 @@ enum TextSelectionIO {
                 selection = NSRange(location: range.location, length: range.length)
             }
         }
-        return FieldSnapshot(value: attribute(element, kAXValueAttribute) as? String, selection: selection)
+        let value = attribute(element, kAXValueAttribute) as? String
+        return FieldSnapshot(
+            value: value,
+            selection: selection,
+            selectedText: value == nil ? attribute(element, kAXSelectedTextAttribute) as? String : nil
+        )
     }
 
     private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
