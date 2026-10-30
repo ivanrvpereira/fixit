@@ -287,3 +287,26 @@ import Testing
         #expect(origin.x == 880)
     }
 }
+
+@Suite struct GeckoDetectionTests {
+    private func bundle(withXUL: Bool) throws -> URL {
+        let app = FileManager.default.temporaryDirectory.appendingPathComponent("gecko-test-\(UUID().uuidString).app")
+        let macOS = app.appendingPathComponent("Contents/MacOS")
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        if withXUL {
+            FileManager.default.createFile(atPath: macOS.appendingPathComponent("XUL").path, contents: Data())
+        }
+        return app
+    }
+
+    @Test func geckoBrowsersAreRecognizedByTheirXULLibrary() throws {
+        let gecko = try bundle(withXUL: true)
+        let other = try bundle(withXUL: false)
+        defer {
+            try? FileManager.default.removeItem(at: gecko)
+            try? FileManager.default.removeItem(at: other)
+        }
+        #expect(AutoFixTarget.usesGecko(bundle: gecko))
+        #expect(!AutoFixTarget.usesGecko(bundle: other))
+    }
+}

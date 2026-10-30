@@ -1187,6 +1187,13 @@ enum AutoFixTarget: Equatable {
     static let textRoles: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole]
 
     // Terminals expose their whole scrollback as one text area; auto-fix must never send or paste that.
+    /// Gecko browsers (Firefox, Zen, LibreWolf) insert a written value at their caret instead of replacing
+    /// the field, so a direct write leaves the old text followed by the fix. Pasting lands right there. Their
+    /// bundles ship Gecko's XUL library.
+    static func usesGecko(bundle: URL) -> Bool {
+        FileManager.default.fileExists(atPath: bundle.appendingPathComponent("Contents/MacOS/XUL").path)
+    }
+
     static let terminalBundleIDs: Set<String> = [
         "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "com.github.wez.wezterm",
         "net.kovidgoyal.kitty", "org.alacritty", "dev.warp.Warp-Stable", "co.zeit.hyper",
@@ -1567,7 +1574,8 @@ enum TextSelectionIO {
     static func replaceDirectly(with text: String, in session: TextTargetSession) async -> Bool {
         // A user's own selection has no flash to avoid, so it always pastes. Writing AXSelectedText is
         // unreliable: Firefox deletes the selection without inserting, which passes the value-changed check.
-        guard session.replacesWholeField, let element = session.focusedElement else { return false }
+        guard session.replacesWholeField, let element = session.focusedElement,
+              !(session.sourceApp?.bundleURL.map(AutoFixTarget.usesGecko) ?? false) else { return false }
         guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString) == .success else { return false }
         return await valueChanged(element, from: session.fieldSnapshot?.value)
     }
