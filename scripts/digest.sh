@@ -13,8 +13,8 @@ cd "$dir"
 # sha256sum on Linux, shasum on macOS: both print "HASH  FILE" and take -c --strict --quiet.
 if command -v sha256sum >/dev/null; then sha() { sha256sum "$@"; }; else sha() { shasum -a 256 "$@"; }; fi
 
-# Everything that is not a folder counts, so an added symlink is an extra file too.
-listed() { find . ! -type d ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort; }
+# Everything that is not a folder counts, so an added symlink, or a SHA256SUMS in a subfolder, is an extra file too.
+listed() { find . ! -type d ! -path ./SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort; }
 
 case "$cmd" in
   write)

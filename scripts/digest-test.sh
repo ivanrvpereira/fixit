@@ -48,6 +48,11 @@ ln -s Fixit.app.tar "$work/extra-link/link.tar"
 label="an extra symlink fails"
 expect_fail "$digest" verify "$work/extra-link" "$d"
 
+d="$(sealed nested-sums)"
+printf 'extra\n' > "$work/nested-sums/sub/SHA256SUMS"
+label="an extra SHA256SUMS in a subfolder fails"
+expect_fail "$digest" verify "$work/nested-sums" "$d"
+
 d="$(sealed missing)"
 rm "$work/missing/sub/Fixit.dmg"
 label="a missing file fails"
