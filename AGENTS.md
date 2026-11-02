@@ -26,6 +26,8 @@
 - `Resources/Info.plist` — app bundle metadata; edit only for bundle behavior.
 - `config/config.example.json` and `config/styles/*.md` — checked-in sample user config and prompts.
 - `scripts/build-app.sh` — release build, app bundle assembly, codesigning.
+- `scripts/sign-app.sh` — signs the app and its Sparkle parts; used by `build-app.sh` and the release sign job.
+- `scripts/digest.sh` — seals and checks the files that release jobs hand on; tested by `scripts/digest-test.sh`.
 - `.build/` and `dist/` — generated outputs; regenerate instead of editing.
 
 ## Git

@@ -43,7 +43,18 @@ different signing identity.
 
 Push a tag like `v0.8.0`. The [release workflow](.github/workflows/release.yml) signs `Fixit.app` with the Developer ID Application certificate, notarizes and staples the app and the DMG, and attaches `Fixit-<version>.zip`, `Fixit-<version>.dmg`, `Fixit.dmg`, and the rendered Homebrew cask to a GitHub release. Then it commits the signed Sparkle `appcast.xml` to `main` and pushes the cask to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap`. The [release skill](.agents/skills/release/SKILL.md) has the full step list and troubleshooting.
 
-The workflow reads these secrets from the `release` environment (Settings > Environments). Only runs from `v*` tags can use the environment; GitHub refuses a run from a branch. Set a secret there with `gh secret set NAME --env release`, not as a repository secret:
+The workflow has four jobs, so that no job both holds a secret and runs code from the build:
+
+| Job | Secrets | What it does |
+|---|---|---|
+| **Build app** | none | Stamps the tag's version, builds an ad-hoc signed `Fixit.app` with `scripts/build-app.sh` (SwiftPM and the Sparkle package), and hands it on as a tar, which keeps the file modes and the symlinks in `Sparkle.framework`. |
+| **Sign and notarize** | signing, notary | Signs the app with `scripts/sign-app.sh` and the Developer ID identity (only `codesign` may use the key), notarizes and staples it, packs the zip, makes and signs the DMG, deletes the signing keychain, then notarizes and staples the DMG. It never runs SwiftPM, the build script, or the app. |
+| **Verify signed app** | none | Checks the zip and DMG as Gatekeeper would: signatures, team ID `6C3B6R8MUR`, stapled tickets, and Gatekeeper acceptance. Runs `Fixit cli version` from the zip, and lints the rendered cask with `brew style`. |
+| **Publish release** | Sparkle, tap | Downloads Sparkle's `generate_appcast` and checks it against a pinned SHA-256, signs the appcast, creates the release, commits `appcast.xml` to `main` after the release exists, pushes the cask to the tap, and waits for the tap's CI. |
+
+Each job seals what it hands on with `scripts/digest.sh`, which writes a `SHA256SUMS` file, and passes the digest of that file to the next job as a job output. The next job stops if the digest, a file, or the list of files does not match, so a file swapped between jobs is never signed or published. `scripts/digest-test.sh` tests the script.
+
+The sign and publish jobs read these secrets from the `release` environment (Settings > Environments). Only runs from `v*` tags can use the environment; GitHub refuses a run from a branch. Set a secret there with `gh secret set NAME --env release`, not as a repository secret:
 
 | Secret | Purpose |
 |---|---|

@@ -95,22 +95,6 @@ if [[ "$CODE_SIGN_IDENTITY" != "-" ]] && ! security find-identity -p codesigning
   exit 1
 fi
 
-if [[ "$CODE_SIGN_IDENTITY" == "Developer ID Application"* ]]; then
-  CODESIGN_FLAGS=(--options runtime --timestamp)
-else
-  CODESIGN_FLAGS=(--timestamp=none)
-fi
-
-SPARKLE_EMBEDDED="$FRAMEWORKS/Sparkle.framework"
-SPARKLE_VERSION="$SPARKLE_EMBEDDED/Versions/B"
-if [[ -e "$SPARKLE_VERSION/XPCServices/Downloader.xpc" ]]; then
-  codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_VERSION/XPCServices/Downloader.xpc"
-fi
-codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_VERSION/XPCServices/Installer.xpc"
-codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_VERSION/Autoupdate"
-codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_VERSION/Updater.app"
-codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$SPARKLE_EMBEDDED"
-codesign --force --sign "$CODE_SIGN_IDENTITY" "${CODESIGN_FLAGS[@]}" "$APP_DIR"
-codesign --verify --strict --verbose=2 "$APP_DIR"
+"$ROOT/scripts/sign-app.sh" "$APP_DIR" "$CODE_SIGN_IDENTITY"
 
 printf 'Built and signed %s\n' "$APP_DIR"
