@@ -10,6 +10,9 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
+    # The signing, notary, Sparkle, and tap secrets live in the release environment,
+    # which only v* tags can use (Settings > Environments).
+    environment: release
     steps:
       - uses: actions/checkout@v5
         with:
