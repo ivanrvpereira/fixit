@@ -5,33 +5,94 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
+
+# The release is four jobs, so that no job both holds a secret and runs code from the build:
+# build makes the app with no secrets; sign gets the signing and notary keys but never builds and never
+# runs the app; verify checks and runs the signed app with no secrets; publish gets the Sparkle key and
+# the tap token and publishes only what sign sealed and verify checked. Each job seals what it hands on
+# with scripts/digest.sh and passes the digest as a job output, so a file swapped between jobs is never
+# signed or published. The signing, notary, Sparkle, and tap secrets live in the release environment,
+# which only v* tags can use (Settings > Environments); every job that reads one names it.
 
 jobs:
-  release:
+  build:
+    name: Build app
     runs-on: macos-15
-    # The signing, notary, Sparkle, and tap secrets live in the release environment,
-    # which only v* tags can use (Settings > Environments).
-    environment: release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      digest: ${{ steps.seal.outputs.digest }}
     steps:
-      - uses: actions/checkout@v5
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          # Nothing here pushes via git; gh uses GH_TOKEN explicitly.
           persist-credentials: false
 
       - name: Set version from tag
+        id: version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          # Guard: VERSION is spliced into sed and file names below.
+          # Guard: VERSION is spliced into sed and file names in the later jobs.
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$'; then
             echo "Tag does not look like a version: $GITHUB_REF_NAME" >&2
             exit 1
           fi
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $VERSION" Resources/Info.plist
 
-      # Official GitHub pattern for signing on macOS runners: import the
-      # Developer ID identity into an ephemeral keychain that dies with the VM.
+      # Ad hoc: the sign job replaces every signature with the Developer ID one.
+      - name: Build app (ad-hoc signed)
+        run: CODE_SIGN_IDENTITY=- ./scripts/build-app.sh
+
+      # A tar keeps the file modes and the symlinks inside Sparkle.framework, which an artifact does not.
+      # COPYFILE_DISABLE leaves out extended attributes, which codesign rejects inside a bundle.
+      - name: Seal the app
+        id: seal
+        run: |
+          mkdir handoff
+          COPYFILE_DISABLE=1 tar -cf handoff/Fixit.app.tar -C dist Fixit.app
+          echo "digest=$(scripts/digest.sh write handoff)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-unsigned
+          path: handoff/
+          if-no-files-found: error
+
+  sign:
+    name: Sign and notarize
+    needs: build
+    runs-on: macos-15
+    environment: release
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
+    steps:
+      # The checkout gives scripts/digest.sh and scripts/sign-app.sh. This job runs no SwiftPM, no
+      # build script, and none of the app's code.
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Download app
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-unsigned
+          path: handoff
+
+      - name: Check the app against the build job's digest
+        env:
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          scripts/digest.sh verify handoff "$DIGEST"
+          mkdir dist
+          tar -xpf handoff/Fixit.app.tar -C dist
+
+      # Official GitHub pattern for signing on macOS runners: import the Developer ID identity into an
+      # ephemeral keychain. Only codesign may use the key (-T).
       - name: Import signing identity
         env:
           DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
@@ -47,7 +108,8 @@ jobs:
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$RUNNER_TEMP/signing.p12" -P "$DEVELOPER_ID_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/signing.p12" -P "$DEVELOPER_ID_CERT_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm -f "$RUNNER_TEMP/signing.p12"
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
           IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -1)"
@@ -56,10 +118,9 @@ jobs:
             exit 1
           fi
           echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
-          rm -f "$RUNNER_TEMP/signing.p12"
 
-      - name: Build app (signed with the release identity)
-        run: CODE_SIGN_IDENTITY="$IDENTITY" ./scripts/build-app.sh
+      - name: Sign app
+        run: scripts/sign-app.sh dist/Fixit.app "$IDENTITY"
 
       - name: Notarize and staple app
         env:
@@ -80,42 +141,179 @@ jobs:
 
       - name: Package
         run: |
+          mkdir release
           STAGE="$(mktemp -d)"
           cp -R dist/Fixit.app "$STAGE/"
-          COPYFILE_DISABLE=1 ditto -c -k "$STAGE" "Fixit-$VERSION.zip"
-          echo "SHA256=$(shasum -a 256 "Fixit-$VERSION.zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          COPYFILE_DISABLE=1 ditto -c -k "$STAGE" "release/Fixit-$VERSION.zip"
 
-      - name: Build, notarize, staple DMG
-        env:
-          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
-          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+      # The DMG holds the stapled app, so it is made and signed after the app's notarization.
+      - name: Build and sign DMG
         run: |
           STAGE="$(mktemp -d)"
           cp -R dist/Fixit.app "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "Fixit" -srcfolder "$STAGE" -ov -format UDZO "Fixit-$VERSION.dmg"
-          codesign --force --sign "$IDENTITY" --timestamp "Fixit-$VERSION.dmg"
-          xcrun notarytool submit "Fixit-$VERSION.dmg" \
+          hdiutil create -volname "Fixit" -srcfolder "$STAGE" -ov -format UDZO "release/Fixit-$VERSION.dmg"
+          codesign --force --sign "$IDENTITY" --timestamp "release/Fixit-$VERSION.dmg"
+
+      # That was the last codesign: remove the certificate before anything else runs.
+      - name: Delete signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+
+      - name: Notarize and staple DMG
+        env:
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+        run: |
+          xcrun notarytool submit "release/Fixit-$VERSION.dmg" \
             --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_API_KEY_ID" \
             --issuer "$NOTARY_API_ISSUER_ID" --wait
-          xcrun stapler staple "Fixit-$VERSION.dmg"
+          rm -f "$RUNNER_TEMP/notary.p8"
+          xcrun stapler staple "release/Fixit-$VERSION.dmg"
 
-      # Check the exact artifacts users download, as Gatekeeper would, so a
-      # broken signature or missing ticket fails here before anything ships.
+      - name: Seal the zip and DMG
+        id: seal
+        run: echo "digest=$(scripts/digest.sh write release)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload zip and DMG
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-signed
+          path: release/
+          if-no-files-found: error
+
+      # Hosted runners are ephemeral, but delete the keys anyway (defense in depth, and required if this
+      # ever moves to a self-hosted runner).
+      - name: Delete keys
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/signing.p12"
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+
+  verify:
+    name: Verify signed app
+    needs: [build, sign]
+    runs-on: macos-15
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      # The Apple team of the Developer ID certificate. A different team makes users grant Accessibility again.
+      TEAM_ID: 6C3B6R8MUR
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Download zip and DMG
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-signed
+          path: release
+
+      - name: Check the zip and DMG against the sign job's digest
+        env:
+          DIGEST: ${{ needs.sign.outputs.digest }}
+        run: scripts/digest.sh verify release "$DIGEST"
+
+      # Check the exact artifacts users download, as Gatekeeper would, so a broken signature, a wrong
+      # team, or a missing ticket fails here before anything ships.
       - name: Verify Gatekeeper accepts artifacts
         run: |
           set -euo pipefail
+          team() {
+            local info
+            info="$(codesign -dvv "$1" 2>&1)"
+            grep -qx "TeamIdentifier=$TEAM_ID" <<< "$info" \
+              || { echo "$1 is not signed by team $TEAM_ID" >&2; exit 1; }
+          }
           CHECK="$(mktemp -d)"
-          ditto -x -k "Fixit-$VERSION.zip" "$CHECK/zip"
+          ditto -x -k "release/Fixit-$VERSION.zip" "$CHECK/zip"
           spctl --assess -vv --type execute "$CHECK/zip/Fixit.app"
           xcrun stapler validate "$CHECK/zip/Fixit.app"
           codesign --verify --deep --strict "$CHECK/zip/Fixit.app"
-          spctl --assess -vv --type open --context context:primary-signature "Fixit-$VERSION.dmg"
-          xcrun stapler validate "Fixit-$VERSION.dmg"
-          MOUNT="$(hdiutil attach -nobrowse -readonly "Fixit-$VERSION.dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')"
+          team "$CHECK/zip/Fixit.app"
+          team "$CHECK/zip/Fixit.app/Contents/Frameworks/Sparkle.framework"
+          spctl --assess -vv --type open --context context:primary-signature "release/Fixit-$VERSION.dmg"
+          xcrun stapler validate "release/Fixit-$VERSION.dmg"
+          team "release/Fixit-$VERSION.dmg"
+          MOUNT="$(hdiutil attach -nobrowse -readonly "release/Fixit-$VERSION.dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')"
           trap 'hdiutil detach "$MOUNT" -quiet || true' EXIT
           spctl --assess -vv --type execute "$MOUNT/Fixit.app"
           xcrun stapler validate "$MOUNT/Fixit.app"
+          team "$MOUNT/Fixit.app"
+
+      # The signed app loads its Sparkle.framework under the hardened runtime and reports the tag's version.
+      - name: Run the app from the zip
+        run: |
+          set -euo pipefail
+          RUN="$(mktemp -d)"
+          ditto -x -k "release/Fixit-$VERSION.zip" "$RUN"
+          GOT="$("$RUN/Fixit.app/Contents/MacOS/Fixit" cli version)"
+          if [ "$GOT" != "$VERSION" ]; then
+            echo "Fixit.app reports version '$GOT', not $VERSION" >&2
+            exit 1
+          fi
+
+      # Run the same `brew style` check the tap's CI runs, against the rendered cask in real tap context,
+      # so a bad template (e.g. stanza order) fails the release here instead of turning the tap's CI red.
+      # Homebrew is third-party code, so this runs here, without secrets; publish renders the same cask
+      # from the same template and zip.
+      - name: Render and lint Homebrew cask
+        run: |
+          SHA256="$(shasum -a 256 "release/Fixit-$VERSION.zip" | cut -d' ' -f1)"
+          sed -e "s/{{VERSION}}/$VERSION/" -e "s/{{SHA256}}/$SHA256/" \
+            packaging/homebrew/fixit.rb > fixit.rb
+          brew tap ivanrvpereira/tap
+          cp fixit.rb "$(brew --repository ivanrvpereira/tap)/Casks/fixit.rb"
+          brew style ivanrvpereira/tap
+
+  publish:
+    name: Publish release
+    needs: [build, sign, verify]
+    runs-on: macos-15
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      # Sparkle's generate_appcast signs the appcast with the Sparkle key, so the download is checked
+      # against this SHA-256 before it runs. It is the digest that GitHub lists for Sparkle-2.9.4.tar.xz
+      # on https://github.com/sparkle-project/Sparkle/releases/tag/2.9.4. Keep the version in step with
+      # Package.resolved.
+      SPARKLE_VERSION: 2.9.4
+      SPARKLE_SHA256: ce89daf967db1e1893ed3ebd67575ed82d3902563e3191ca92aaec9164fbdef9
+    steps:
+      # The checkout gives scripts/digest.sh and the cask template. This job runs no build and none of the
+      # app's code.
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Nothing here pushes via git; gh uses GH_TOKEN explicitly.
+          persist-credentials: false
+
+      - name: Download zip and DMG
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-signed
+          path: release
+
+      # Publish only the files that the sign job sealed and the verify job checked.
+      - name: Check the zip and DMG against the sign job's digest
+        env:
+          DIGEST: ${{ needs.sign.outputs.digest }}
+        run: |
+          scripts/digest.sh verify release "$DIGEST"
+          echo "SHA256=$(shasum -a 256 "release/Fixit-$VERSION.zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Download Sparkle tools
+        run: |
+          set -euo pipefail
+          TARBALL="$RUNNER_TEMP/Sparkle-$SPARKLE_VERSION.tar.xz"
+          curl -fsSL -o "$TARBALL" \
+            "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz"
+          echo "$SPARKLE_SHA256  $TARBALL" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xJf "$TARBALL" -C "$RUNNER_TEMP/sparkle" bin/generate_appcast
 
       - name: Generate appcast
         env:
@@ -126,14 +324,11 @@ jobs:
             echo "Missing required secret: SPARKLE_ED_PRIVATE_KEY" >&2
             exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/sparkle"
-          curl -sL https://github.com/sparkle-project/Sparkle/releases/download/2.9.4/Sparkle-2.9.4.tar.xz \
-            | tar -xJ -C "$RUNNER_TEMP/sparkle" bin/generate_appcast
           mkdir -p appcast-work
           gh api repos/ivanrvpereira/fixit/contents/appcast.xml \
             -H "Accept: application/vnd.github.raw" > appcast-work/appcast.xml \
             || rm -f appcast-work/appcast.xml
-          cp "Fixit-$VERSION.zip" appcast-work/
+          cp "release/Fixit-$VERSION.zip" appcast-work/
           printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle_ed_key"
           "$RUNNER_TEMP/sparkle/bin/generate_appcast" \
             --ed-key-file "$RUNNER_TEMP/sparkle_ed_key" \
@@ -141,19 +336,11 @@ jobs:
             --link "https://github.com/ivanrvpereira/fixit" appcast-work
           rm -f "$RUNNER_TEMP/sparkle_ed_key"
 
+      # The verify job lints this same render with `brew style`.
       - name: Render Homebrew cask
         run: |
           sed -e "s/{{VERSION}}/$VERSION/" -e "s/{{SHA256}}/$SHA256/" \
             packaging/homebrew/fixit.rb > fixit.rb
-
-      # Run the same `brew style` check the tap's CI runs, against the
-      # rendered cask in real tap context, so a bad template (e.g. stanza
-      # order) fails the release here instead of turning the tap's CI red.
-      - name: Lint rendered cask
-        run: |
-          brew tap ivanrvpereira/tap
-          cp fixit.rb "$(brew --repository ivanrvpereira/tap)/Casks/fixit.rb"
-          brew style ivanrvpereira/tap
 
       - name: Create release
         env:
@@ -161,8 +348,8 @@ jobs:
         run: |
           # Stable-named copy so the website can link
           # .../releases/latest/download/Fixit.dmg without per-release updates.
-          cp "Fixit-$VERSION.dmg" Fixit.dmg
-          gh release create "$GITHUB_REF_NAME" "Fixit-$VERSION.zip" "Fixit-$VERSION.dmg" Fixit.dmg fixit.rb \
+          cp "release/Fixit-$VERSION.dmg" Fixit.dmg
+          gh release create "$GITHUB_REF_NAME" "release/Fixit-$VERSION.zip" "release/Fixit-$VERSION.dmg" Fixit.dmg fixit.rb \
             --title "Fixit $VERSION" --generate-notes
 
       # Commit the appcast to main only after the release exists, so the live
@@ -238,10 +425,6 @@ jobs:
           echo "Timed out waiting for tap CI on $TAP_COMMIT" >&2
           exit 1
 
-      # Hosted runners are ephemeral, but delete the signing keychain anyway
-      # (defense in depth, and required if this ever moves to a self-hosted runner).
-      - name: Delete signing keychain
+      - name: Delete keys
         if: always()
-        run: |
-          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/sparkle_ed_key"
-          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+        run: rm -f "$RUNNER_TEMP/sparkle_ed_key"

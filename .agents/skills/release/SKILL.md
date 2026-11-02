@@ -22,20 +22,24 @@ Releases are fully automated from a version tag. Never tag without explicit user
 
 ## What the Release workflow does (.github/workflows/release.yml)
 
-1. Validates the tag format and stamps `CFBundleShortVersionString` and `CFBundleVersion` from it (Sparkle compares `CFBundleVersion`).
-2. Imports the Developer ID identity into an ephemeral keychain, builds a signed `Fixit.app` via `scripts/build-app.sh`, notarizes it, and staples its ticket.
-3. Packages the stapled app as `Fixit-X.Y.Z.zip`, computes its SHA-256, then builds, signs, notarizes, and staples `Fixit-X.Y.Z.dmg`.
-4. Generates and signs the Sparkle appcast, preserving its release history.
-5. Renders `packaging/homebrew/fixit.rb` (fills `{{VERSION}}`/`{{SHA256}}`).
-6. **Lints the rendered cask** with `brew style` in real tap context — template problems (e.g. stanza order) fail the release before anything is published.
-7. Creates the GitHub release with the zip, DMG, and cask attached.
-8. Commits `appcast.xml` to `main` — only after the release exists, so the feed never points at missing assets.
-9. Pushes the cask to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap` via the `TAP_PUSH_TOKEN` secret (fine-grained PAT, Contents read/write on the tap repo only). If the secret is missing the step skips and the cask must be copied manually.
-10. **Verifies the tap**: polls the tap CI check runs on the pushed commit and fails the release run if the tap goes red or doesn't finish within ~20 min.
+Four jobs, so that no job both holds a secret and runs code from the build. Each job seals its hand-off with `scripts/digest.sh` and passes the digest as a job output; the next job stops on a wrong digest, a changed file, or an extra file. `BUILDING.md` has the job table.
+
+1. **Build app** (no secrets): validates the tag format and stamps `CFBundleShortVersionString` and `CFBundleVersion` from it (Sparkle compares `CFBundleVersion`), builds an ad-hoc signed `Fixit.app` via `scripts/build-app.sh`, and hands it on as a tar.
+2. **Sign and notarize** (`release` environment): imports the Developer ID identity into an ephemeral keychain that only `codesign` may use, signs the app via `scripts/sign-app.sh`, notarizes it, and staples its ticket. Packages the stapled app as `Fixit-X.Y.Z.zip`, builds and signs `Fixit-X.Y.Z.dmg`, deletes the keychain, then notarizes and staples the DMG. It never builds or runs the app.
+3. **Verify signed app** (no secrets): checks the zip, the DMG, and the app in the DMG with `spctl`, `stapler validate`, `codesign --verify --deep --strict`, and team ID `6C3B6R8MUR`, and runs `Fixit cli version` from the zip. Renders `packaging/homebrew/fixit.rb` (fills `{{VERSION}}`/`{{SHA256}}`) and **lints the rendered cask** with `brew style` in real tap context — template problems (e.g. stanza order) fail the release before anything is published.
+4. **Publish release** (`release` environment):
+   1. Downloads Sparkle's `generate_appcast`, checks the tarball against the SHA-256 pinned in the workflow, and generates and signs the Sparkle appcast, preserving its release history.
+   2. Renders the cask the same way the verify job did.
+   3. Creates the GitHub release with the zip, DMG, and cask attached.
+   4. Commits `appcast.xml` to `main` — only after the release exists, so the feed never points at missing assets.
+   5. Pushes the cask to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap` via the `TAP_PUSH_TOKEN` secret (fine-grained PAT, Contents read/write on the tap repo only). If the secret is missing the step skips and the cask must be copied manually.
+   6. **Verifies the tap**: polls the tap CI check runs on the pushed commit and fails the release run if the tap goes red or doesn't finish within ~20 min.
+
+When the Sparkle package is upgraded in `Package.resolved`, update `SPARKLE_VERSION` and `SPARKLE_SHA256` in the publish job: take the digest GitHub lists for `Sparkle-X.Y.Z.tar.xz` on the Sparkle release page, and check it with `shasum -a 256` on a download.
 
 ## Signing and notarization
 
-- CI signs with a Developer ID Application identity from the `DEVELOPER_ID_CERT_P12` and `DEVELOPER_ID_CERT_PASSWORD` repo secrets.
+- CI signs with a Developer ID Application identity from the `DEVELOPER_ID_CERT_P12` and `DEVELOPER_ID_CERT_PASSWORD` secrets in the `release` environment.
 - App and DMG notarization use `NOTARY_API_KEY_ID`, `NOTARY_API_ISSUER_ID`, and the raw `.p8` content in `NOTARY_API_KEY_P8`.
 - Sparkle appcast signatures use `SPARKLE_ED_PRIVATE_KEY`; never expose or commit any signing secret.
 - Rotating the Developer ID identity forces users to re-grant Accessibility, so do not replace it without explicit approval.
