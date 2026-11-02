@@ -43,7 +43,7 @@ different signing identity.
 
 Push a tag like `v0.8.0`. The [release workflow](.github/workflows/release.yml) signs `Fixit.app` with the Developer ID Application certificate, notarizes and staples the app and the DMG, and attaches `Fixit-<version>.zip`, `Fixit-<version>.dmg`, `Fixit.dmg`, and the rendered Homebrew cask to a GitHub release. Then it commits the signed Sparkle `appcast.xml` to `main` and pushes the cask to `Casks/fixit.rb` in `ivanrvpereira/homebrew-tap`. The [release skill](.agents/skills/release/SKILL.md) has the full step list and troubleshooting.
 
-The workflow reads these repository secrets:
+The workflow reads these secrets from the `release` environment (Settings > Environments). Only runs from `v*` tags can use the environment; GitHub refuses a run from a branch. Set a secret there with `gh secret set NAME --env release`, not as a repository secret:
 
 | Secret | Purpose |
 |---|---|
