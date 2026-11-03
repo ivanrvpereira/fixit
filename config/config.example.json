@@ -6,6 +6,9 @@
   "apiKeyEnv": null,
   "pickerShortcutKey": "0",
   "pickerShortcutModifiers": ["command", "shift"],
+  "autoFixShortcutKey": null,
+  "autoFixShortcutModifiers": ["command", "shift"],
+  "autoFixStyle": "proofread",
   "styles": [
     {
       "id": "native",

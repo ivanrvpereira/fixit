@@ -38,4 +38,14 @@ import Testing
         let line = #"  data:{"choices":[{"delta":{"content":"x"}}]}"#
         #expect(SSELine.parse(line) == .chunk(content: "x", cost: nil))
     }
+
+    @Test func flagsAReplyCutOffAtTheOutputLimit() {
+        let line = #"data: {"choices":[{"delta":{"content":"x"},"finish_reason":"length"}]}"#
+        #expect(SSELine.parse(line) == .chunk(content: "x", cost: nil, truncated: true))
+    }
+
+    @Test func aNormalFinishIsNotTruncated() {
+        let line = #"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#
+        #expect(SSELine.parse(line) == .chunk(content: nil, cost: nil))
+    }
 }
